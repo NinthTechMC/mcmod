@@ -38,13 +38,14 @@ def edit_java_package(args):
 
     return file
 
-def refactor_modid(root, old_modid, new_modid, coremod_class):
+def refactor_modid(root, old_modid, new_modid, coremod_class, version):
     old_source_root = mcmod.source_root_from_modid(old_modid)
     new_source_root = mcmod.source_root_from_modid(new_modid)
-    os.rename(os.path.join(root, old_source_root), os.path.join(root, new_source_root))
     old_asset_root = mcmod.asset_root_from_modid(old_modid)
     new_asset_root = mcmod.asset_root_from_modid(new_modid)
-    os.rename(os.path.join(root, old_asset_root), os.path.join(root, new_asset_root))
+    if old_modid != new_modid:
+        os.rename(os.path.join(root, old_source_root), os.path.join(root, new_source_root))
+        os.rename(os.path.join(root, old_asset_root), os.path.join(root, new_asset_root))
     
     modinfo_java = os.path.join(root, new_source_root, "ModInfo.java")
     group = mcmod.group_from_modid(new_modid)
@@ -78,17 +79,18 @@ public interface CoremodInfo {{
 }}
 """)
             f.flush()
+    
+    if old_modid != new_modid: 
+        tasks = []
             
-    tasks = []
-        
-    for root, _, files in os.walk(os.path.join(root, new_source_root)):
-        for f in files:
-            if f.endswith(".java"):
-                file = os.path.join(root, f)
-                tasks.append((file, old_modid, new_modid))
-    with multiprocessing.Pool() as pool:
-        for file in pool.imap_unordered(edit_java_package, tasks):
-            print("edited " + file)
+        for root, _, files in os.walk(os.path.join(root, new_source_root)):
+            for f in files:
+                if f.endswith(".java"):
+                    file = os.path.join(root, f)
+                    tasks.append((file, old_modid, new_modid))
+        with multiprocessing.Pool() as pool:
+            for file in pool.imap_unordered(edit_java_package, tasks):
+                print("edited " + file)
 
 
 if __name__ == "__main__":
@@ -167,12 +169,13 @@ if __name__ == "__main__":
         print(f"about to change modid from {old_modid} to {modid}. refactoring maybe incomplete if you hardcoded values that depend on the modid.")
         if input("continue? (y/n) ") != "y":
             exit(1)
-        try:
-            refactor_modid(root, old_modid, modid, coremod_class)
-        except Exception as e:
-            print(e)
-            print("refactoring failed, not making other changes")
-            exit(1)
+
+    try:
+        refactor_modid(root, old_modid, modid, coremod_class, version)
+    except Exception as e:
+        print(e)
+        print("refactoring failed, not making other changes")
+        exit(1)
 
     # write fields
     info["name"] = name

@@ -53,8 +53,6 @@ if __name__ == "__main__":
         for i in IGNROE:
             f.write(i+"\n")
 
-    os.makedirs(os.path.join(mod_folder_name, "libs"), exist_ok=True)
-
     print("trying to build for the first time")
     run_cmd("mcmod build")
 
@@ -64,5 +62,5 @@ if __name__ == "__main__":
     print()
     print("Next:")
     print("  1. Import project in eclipse: File -> Import -> Existing Projects into Workspace")
-    print("  2. Put dependency JARs in libs/")
+    print("  2. Use `mcmod devget` to download dev jars")
     print("  3. Run with `mcmod run client`")
