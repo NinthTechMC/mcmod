@@ -286,10 +286,11 @@ async fn update_build_gradle(project: &Project) -> io::Result<()> {
     let group = project.group().await?;
 
     let mut coremod_root = project.source_root();
+    coremod_root.push(&mcmod.modid);
     coremod_root.push("coremod");
     let coremod_section = if coremod_root.exists() {
         format!(
-            r###"""// coremod
+            r###"// coremod
 jar {{
     manifest {{
         attributes 'FMLCorePlugin': '{group}.coremod.CoremodMain'
@@ -311,11 +312,11 @@ jar {{
     let mut in_coremod = false;
     for line in contents.lines() {
         let line = if line.starts_with("version") {
-            Cow::Owned(format!("version = '{version}'\n"))
+            Cow::Owned(format!("version = '{version}'"))
         } else if line.starts_with("group") {
-            Cow::Owned(format!("group = '{group}'\n"))
+            Cow::Owned(format!("group = '{group}'"))
         } else if line.starts_with("archivesBaseName") {
-            Cow::Owned(format!("archivesBaseName = '{archive_base}'\n"))
+            Cow::Owned(format!("archivesBaseName = '{archive_base}'"))
         } else if line.starts_with("// coremod") {
             in_coremod = !in_coremod;
             continue;

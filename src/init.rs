@@ -38,8 +38,14 @@ impl InitCommand {
                     format!("Directory '{}' is not empty", dir),
                 ));
             }
+            fs::remove_dir_all(dir).await?;
         }
-        fs::remove_dir_all(dir).await?;
+        
+        if let Some(parent) = Path::new(dir).parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
 
         println!("copying '{}' to '{}'", path.to_string_lossy(), dir);
         let r = copy_dir::copy_dir(&path, dir)?;
