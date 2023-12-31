@@ -16,7 +16,7 @@ dependencies {
 
 task deobfJar(type: Jar) {
     from sourceSets.main.output
-    appendix = 'deobf'
+    classifier = 'deobf'
 }
 
 task sourcesJar(type: Jar) {
