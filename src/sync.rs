@@ -38,25 +38,9 @@ impl SyncCommand {
         }
 
         if !self.incremental {
-            // ensure_modid(&project).await?;
-            // write_version_to_java(&project).await?;
             update_gradle(&project).await?;
         }
-        let build_ninja = project.root.join("build.ninja");
-        if !build_ninja.exists() || !self.incremental {
-            let mut forge_source_root = project.forge_root();
-            forge_source_root.push("src");
-            if forge_source_root.exists() {
-                fs::remove_dir_all(&forge_source_root).await?;
-            }
-            write_build_ninja(&build_ninja, &project).await?;
-        }
-
-        let result = Command::new("ninja").current_dir(&project.root).status()?;
-
-        if !result.success() {
-            return Err(io::Error::new(io::ErrorKind::Other, "ninja failed"));
-        }
+        sync_source(&project, self.incremental).await?;
 
         if !self.incremental {
             project.write_mcmod_info().await?;
@@ -73,211 +57,25 @@ impl SyncCommand {
     }
 }
 
-// /// Ensures the current modid is the same as declared
-// async fn ensure_modid(project: &Project) -> io::Result<()> {
-//     let mcmod = project.mcmod_json().await?;
-//     let current_modid = find_modid_from_source(project).await?;
-//     if current_modid == mcmod.modid() {
-//         return Ok(());
-//     }
-//     update_modid_in_source_files(project, &current_modid).await?;
-//
-//     Ok(())
-// }
+async fn sync_source(project: &Project, incremental: bool) -> io::Result<()> {
+    println!("syncing source");
+    let build_ninja = project.root.join("build.ninja");
+    if !build_ninja.exists() || !incremental {
+        let mut forge_source_root = project.forge_root();
+        forge_source_root.push("src");
+        if forge_source_root.exists() {
+            fs::remove_dir_all(&forge_source_root).await?;
+        }
+        write_build_ninja(&build_ninja, &project).await?;
+    }
 
-// /// Find the modid using the source directory
-// async fn find_modid_from_source(project: &Project) -> io::Result<String> {
-//     let source_root = project.source_root().await?;
-//     let mut dir = fs::read_dir(&source_root).await?;
-//     let mut modid = None;
-//     while let Some(entry) = dir.next_entry().await? {
-//         if entry.file_type().await?.is_dir() {
-//             if modid.is_some() {
-//                 return Err(io::Error::new(
-//                     io::ErrorKind::InvalidData,
-//                     format!("Multiple directories found in {}", source_root.display()),
-//                 ));
-//             }
-//             match entry.file_name().to_str() {
-//                 Some(name) => modid = Some(name.to_owned()),
-//                 None => {
-//                     return Err(io::Error::new(
-//                         io::ErrorKind::InvalidData,
-//                         format!("Invalid directory name in {}", source_root.display()),
-//                     ))
-//                 }
-//             }
-//         }
-//     }
-//     match modid {
-//         Some(modid) => Ok(modid),
-//         None => Err(io::Error::new(
-//             io::ErrorKind::InvalidData,
-//             format!("No directories found in {}", source_root.display()),
-//         )),
-//     }
-// }
-//
-// async fn update_modid_in_source_files(project: &Project, old_modid: &str) -> io::Result<()> {
-//     let new_modid = &project.mcmod_json().await?.modid();
-//     println!("updating modid from '{old_modid}' to '{new_modid}'");
-//
-//     let source_root = project.source_root().await?;
-//     let mut old_source_root = source_root.clone();
-//     old_source_root.push(old_modid);
-//     let mut new_source_root = source_root;
-//     new_source_root.push(new_modid);
-//
-//     println!(
-//         "renaming '{}' to '{}'",
-//         old_source_root.display(),
-//         new_source_root.display()
-//     );
-//     fs::rename(old_source_root, &new_source_root).await?;
-//
-//     let mut join_set = JoinSet::new();
-//     let (send, mut recv) = mpsc::channel::<io::Result<PathBuf>>(100);
-//     let recv_future = async move {
-//         let mut error = None;
-//         while let Some(result) = recv.recv().await {
-//             if error.is_some() {
-//                 continue;
-//             }
-//             match result {
-//                 Ok(file) => {
-//                     println!("updated '{}'", file.display());
-//                 }
-//                 Err(e) => {
-//                     recv.close();
-//                     error = Some(e);
-//                 }
-//             }
-//         }
-//         match error {
-//             Some(e) => Err(e),
-//             None => Ok(()),
-//         }
-//     };
-//     join_set.spawn(recv_future);
-//     let old_modid = Arc::from(old_modid);
-//     let new_modid = Arc::from(new_modid.as_str());
-//     for entry in WalkDir::new(new_source_root).into_iter() {
-//         let entry = entry?;
-//         let name = match entry.file_name().to_str() {
-//             Some(name) => name,
-//             None => continue,
-//         };
-//         if name.ends_with(".java") {
-//             let file = entry.path().to_path_buf();
-//             println!("queueing '{}'", file.display());
-//             let old_modid = Arc::clone(&old_modid);
-//             let new_modid = Arc::clone(&new_modid);
-//             let send = send.clone();
-//             join_set.spawn(async move {
-//                 let result = update_modid_in(&file, old_modid, new_modid)
-//                     .await
-//                     .map(|_| file);
-//                 let _ = send.send(result).await;
-//                 Ok(())
-//             });
-//         }
-//     }
-//
-//     drop(send);
-//
-//     while let Some(result) = join_set.join_next().await {
-//         result??;
-//     }
-//
-//     Ok(())
-// }
+    let result = Command::new("ninja").current_dir(&project.root).status()?;
 
-// async fn update_modid_in(file: &Path, old_modid: Arc<str>, new_modid: Arc<str>) -> io::Result<()> {
-//     let contents = fs::read_to_string(file).await?;
-//     let f = File::create(file).await?;
-//     let mut writer = BufWriter::new(f);
-//     for line in contents.lines() {
-//         if line.starts_with("package ") {
-//             let line = line.replace(old_modid.as_ref(), new_modid.as_ref());
-//             writer.write_all(line.as_bytes()).await?;
-//         } else if line.starts_with("import ") {
-//             let line = line.replace(old_modid.as_ref(), new_modid.as_ref());
-//             writer.write_all(line.as_bytes()).await?;
-//         } else {
-//             writer.write_all(line.as_bytes()).await?;
-//         }
-//         writer.write_all(b"\n").await?;
-//     }
-//     writer.flush().await?;
-//     Ok(())
-// }
-//
-// async fn write_version_to_java(project: &Project) -> io::Result<()> {
-//     let mcmod = project.mcmod_json().await?;
-//     let modid = mcmod.original_modid();
-//     let version = &mcmod.version;
-//     let group = project.group().await?;
-//     let group_internal = group.replace('.', "/");
-//
-//     let mut source_root = project.source_root().await?;
-//     source_root.push(modid);
-//     let modinfo_java = source_root.join("ModInfo.java");
-//
-//     File::create(&modinfo_java)
-//         .await?
-//         .write_all(
-//             format!(
-//                 r###"package {group};
-//
-// // This file is automatically generated
-// // Do not edit this file manually
-//
-// public interface ModInfo {{
-//     String Id = "{modid}";
-//     String Version = "{version}";
-//     String Group = "{group}";
-//     String GroupInternal = "{group_internal}";
-// }}
-//
-// "###
-//             )
-//             .as_bytes(),
-//         )
-//         .await?;
-//
-//     source_root.push("coremod");
-//     if !source_root.exists() {
-//         return Ok(());
-//     }
-//
-//     source_root.push("CoremodInfo.java");
-//
-//     File::create(&source_root)
-//         .await?
-//         .write_all(
-//             format!(
-//                 r###"package {group}.coremod;
-//
-// // This file is automatically generated
-// // Do not edit this file manually
-//
-// public interface CoremodInfo {{
-//     String Id = "{modid}";
-//     String Version = "{version}";
-//     String Group = "{group}";
-//     String GroupInternal = "{group_internal}";
-//     String CoremodGroup = "{group}.coremod";
-//     String CoremodGroupInternal = "{group_internal}/coremod";
-// }}
-//
-// "###
-//             )
-//             .as_bytes(),
-//         )
-//         .await?;
-//
-//     Ok(())
-// }
+    if !result.success() {
+        return Err(io::Error::new(io::ErrorKind::Other, "ninja failed"));
+    }
+    Ok(())
+}
 
 async fn update_gradle(project: &Project) -> io::Result<()> {
     let mcmod = project.mcmod_json().await?;
@@ -304,7 +102,7 @@ async fn update_gradle(project: &Project) -> io::Result<()> {
         mcmod.gradle_version().to_owned(),
         mcmod.gradle_group().into_owned(),
         mcmod.archive_base_name().into_owned(),
-        mcmod.original_modid().to_owned(),
+        mcmod.modid.to_owned(),
         mcmod.version.to_owned(),
         project.source_group().await?,
     );
@@ -313,59 +111,8 @@ async fn update_gradle(project: &Project) -> io::Result<()> {
     while let Some(result) = join_set.join_next().await {
         result??;
     }
-    //
-    // let status = Command::new("txtpp")
-    //     .args(["build.gradle"])
-    //     .current_dir(&project.forge_root())
-    //     .status()?;
-    //
-    // if !status.success() {
-    //     return Err(io::Error::new(io::ErrorKind::Other, "txtpp failed"));
-    // }
 
     Ok(())
-
-    // let version = &mcmod.version;
-    // let name = &mcmod.name;
-    // let archive_base = name.to_ascii_lowercase().replace(" ", "-");
-    // let group = project.group().await?;
-    //
-    //
-    // let mut build_gradle = project.forge_root();
-    // build_gradle.push("build.gradle");
-    // let contents = fs::read_to_string(&build_gradle).await?;
-    // let file = File::create(&build_gradle).await?;
-    // let mut writer = BufWriter::new(file);
-    // let mut in_coremod = false;
-    // for line in contents.lines() {
-    //     // mechanism to bypass mcmod
-    //     if !line.ends_with(" // mcmod ignore") {
-    //         let line = if line.starts_with("version") {
-    //             Cow::Owned(format!("version = '{version}'"))
-    //         } else if line.starts_with("group") {
-    //             Cow::Owned(format!("group = '{group}'"))
-    //         } else if line.starts_with("archivesBaseName") {
-    //             Cow::Owned(format!("archivesBaseName = '{archive_base}'"))
-    //         } else if line.starts_with("// coremod") {
-    //             in_coremod = !in_coremod;
-    //             continue;
-    //         } else if line.starts_with("dependencies {") {
-    //             writer.write_all(coremod_section.as_bytes()).await?;
-    //             Cow::Borrowed(line)
-    //         } else {
-    //             Cow::Borrowed(line)
-    //         };
-    //         if !in_coremod {
-    //             writer.write_all(line.as_bytes()).await?;
-    //             writer.write_all(b"\n").await?;
-    //         }
-    //     } else {
-    //         writer.write_all(line.as_bytes()).await?;
-    //         writer.write_all(b"\n").await?;
-    //     }
-    // }
-    // writer.flush().await?;
-    // Ok(())
 }
 
 async fn write_compatibility_gradle(gradle_generated_root: PathBuf, java: u32) -> io::Result<()> {

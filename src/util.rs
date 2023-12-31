@@ -20,13 +20,21 @@ pub struct Project {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Mcmod {
-    modid: String,
+    /// Version of Java to use
     pub java: u32,
+    /// Version of template. Currently unused
     pub template: String,
+    /// Mod Version. Can be any string.
     pub version: String,
+    /// Override default gradle settings
     pub gradle_override: Option<GradleOverride>,
+    /// The coremod class
     pub coremod: Option<String>,
+    /// Libraries to download
+    pub libs: Vec<String>,
 
+    // mcmod.info fields
+    pub modid: String,
     pub name: String,
     pub description: String,
     pub url: String,
@@ -36,7 +44,6 @@ pub struct Mcmod {
     pub logo_file: String,
     pub screenshots: Vec<String>,
     pub dependencies: Vec<String>,
-    pub libs: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,13 +56,6 @@ pub struct GradleOverride {
 }
 
 impl Mcmod {
-    pub fn original_modid(&self) -> &str {
-        &self.modid
-    }
-    // pub fn modid(&self) -> String {
-    //     self.modid.to_lowercase()
-    // }
-
     pub fn gradle_version(&self) -> &str {
         match self.gradle_override.as_ref() {
             Some(x) if x.enabled => &x.version,
@@ -215,47 +215,6 @@ impl Project {
     pub fn assets_root(&self) -> PathBuf {
         self.root.join("assets")
     }
-
-    // pub async fn group(&self) -> io::Result<String> {
-    //     let mcmod = self.mcmod_json().await?;
-    //     let prefix = &mcmod.prefix;
-    //     let modid = mcmod.modid();
-    //     if prefix.is_empty() {
-    //         return Ok(modid);
-    //     }
-    //     Ok(format!( "{prefix}.{modid}"))
-    // }
-    //
-    // pub async fn java_version(&self) -> io::Result<u32> {
-    //     if let Some(x) = self.java_version.get() {
-    //         return Ok(*x);
-    //     }
-    //     let file = File::open(self.forge_root().join("build.gradle")).await?;
-    //     let reader = BufReader::new(file);
-    //     let mut lines = reader.lines();
-    //     let mut version = None;
-    //     while let Some(line) = lines.next_line().await? {
-    //         if let Some(line) = line.strip_prefix("sourceCompatibility =") {
-    //             let line = line.trim();
-    //             if line == "1.8" {
-    //                 version = Some(8u32);
-    //             } else {
-    //                 let v = line.parse::<u32>().map_err(|_| {
-    //                     io::Error::new(io::ErrorKind::InvalidData, "Invalid Java version")
-    //                 })?;
-    //                 version = Some(v);
-    //             }
-    //             break;
-    //         }
-    //     }
-    //     match version {
-    //         None => Err(io::Error::new(
-    //             io::ErrorKind::InvalidData,
-    //             "Could not find Java version",
-    //         )),
-    //         Some(v) => Ok(*self.java_version.get_or_init(|| v)),
-    //     }
-    // }
 
     pub async fn run_gradlew(&self, args: &[&str]) -> io::Result<()> {
         let java_version = self.mcmod_json().await?.java;
