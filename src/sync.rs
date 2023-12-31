@@ -303,7 +303,13 @@ async fn sync_libs(project: &Project) -> io::Result<()> {
             Some(name) => name,
             None => continue,
         };
-        match needs_download.iter().position(|lib| lib == &name) {
+        match needs_download.iter().position(|lib| { 
+            if lib.starts_with("http") {
+                Path::new(lib).file_name().and_then(|s| s.to_str()).map(|s| s == name).unwrap_or(false)
+            } else {
+                lib == &name
+            }
+        }) {
             Some(i) => {
                 // up to date
                 needs_download.swap_remove(i);
