@@ -77,7 +77,7 @@ impl SyncCommand {
 async fn ensure_modid(project: &Project) -> io::Result<()> {
     let mcmod = project.mcmod_json().await?;
     let current_modid = find_modid_from_source(project).await?;
-    if current_modid == mcmod.modid {
+    if current_modid == mcmod.modid() {
         return Ok(());
     }
     update_modid_in_source_files(project, &current_modid).await?;
@@ -119,7 +119,7 @@ async fn find_modid_from_source(project: &Project) -> io::Result<String> {
 }
 
 async fn update_modid_in_source_files(project: &Project, old_modid: &str) -> io::Result<()> {
-    let new_modid = &project.mcmod_json().await?.modid;
+    let new_modid = &project.mcmod_json().await?.modid();
     println!("updating modid from '{old_modid}' to '{new_modid}'");
 
     let source_root = project.source_root().await?;
@@ -214,7 +214,7 @@ async fn update_modid_in(file: &Path, old_modid: Arc<str>, new_modid: Arc<str>) 
 
 async fn write_version_to_java(project: &Project) -> io::Result<()> {
     let mcmod = project.mcmod_json().await?;
-    let modid = &mcmod.modid;
+    let modid = mcmod.original_modid();
     let version = &mcmod.version;
     let group = project.group().await?;
     let group_internal = group.replace('.', "/");
@@ -287,7 +287,7 @@ async fn update_build_gradle(project: &Project) -> io::Result<()> {
     let group = project.group().await?;
 
     let mut coremod_root = project.source_root().await?;
-    coremod_root.push(&mcmod.modid);
+    coremod_root.push(mcmod.original_modid());
     coremod_root.push("coremod");
     let coremod_section = if coremod_root.exists() {
         format!(
@@ -312,22 +312,28 @@ jar {{
     let mut writer = BufWriter::new(file);
     let mut in_coremod = false;
     for line in contents.lines() {
-        let line = if line.starts_with("version") {
-            Cow::Owned(format!("version = '{version}'"))
-        } else if line.starts_with("group") {
-            Cow::Owned(format!("group = '{group}'"))
-        } else if line.starts_with("archivesBaseName") {
-            Cow::Owned(format!("archivesBaseName = '{archive_base}'"))
-        } else if line.starts_with("// coremod") {
-            in_coremod = !in_coremod;
-            continue;
-        } else if line.starts_with("dependencies {") {
-            writer.write_all(coremod_section.as_bytes()).await?;
-            Cow::Borrowed(line)
+        // mechanism to bypass mcmod
+        if !line.ends_with(" // mcmod ignore") {
+            let line = if line.starts_with("version") {
+                Cow::Owned(format!("version = '{version}'"))
+            } else if line.starts_with("group") {
+                Cow::Owned(format!("group = '{group}'"))
+            } else if line.starts_with("archivesBaseName") {
+                Cow::Owned(format!("archivesBaseName = '{archive_base}'"))
+            } else if line.starts_with("// coremod") {
+                in_coremod = !in_coremod;
+                continue;
+            } else if line.starts_with("dependencies {") {
+                writer.write_all(coremod_section.as_bytes()).await?;
+                Cow::Borrowed(line)
+            } else {
+                Cow::Borrowed(line)
+            };
+            if !in_coremod {
+                writer.write_all(line.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+            }
         } else {
-            Cow::Borrowed(line)
-        };
-        if !in_coremod {
             writer.write_all(line.as_bytes()).await?;
             writer.write_all(b"\n").await?;
         }
@@ -365,7 +371,7 @@ async fn write_build_ninja(file: &Path, project: &Project) -> io::Result<()> {
     target_root.push("main");
     target_root.push("resources");
     target_root.push("assets");
-    target_root.push(&project.mcmod_json().await?.modid);
+    target_root.push(&project.mcmod_json().await?.modid());
     add_copy_edge(
         Arc::new(assets_root),
         Arc::new(target_root),

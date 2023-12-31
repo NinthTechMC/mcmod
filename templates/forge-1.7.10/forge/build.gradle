@@ -69,7 +69,16 @@ processResources
 
 task deobfJar(type: Jar) {
     from sourceSets.main.output
-    from sourceSets.main.java
     appendix = 'deobf'
+}
+
+task sourcesJar(type: Jar) {
+    from sourceSets.main.allSource
+    classifier = 'sources'
+}
+
+artifacts {
+    archives deobfJar
+    archives sourcesJar
 }
 

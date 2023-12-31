@@ -6,7 +6,7 @@ pub async fn run_build(dir: &str) -> io::Result<()> {
     let sync = SyncCommand { incremental: false };
     sync.run(dir).await?;
     let project = Project::new_in(dir)?;
-    project.run_gradlew(&["build", "deobfJar"]).await?;
+    project.run_gradlew(&["build"]).await?;
 
     let mut output = project.forge_root();
     output.push("build");

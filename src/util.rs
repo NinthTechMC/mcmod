@@ -21,7 +21,7 @@ pub struct Project {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Mcmod {
-    pub modid: String,
+    modid: String,
     pub template: String,
     pub version: String,
     pub name: String,
@@ -37,6 +37,15 @@ pub struct Mcmod {
 
     #[serde(default = "default_prefix")]
     pub prefix: String,
+}
+
+impl Mcmod {
+    pub fn original_modid(&self) -> &str {
+        &self.modid
+    }
+    pub fn modid(&self) -> String {
+        self.modid.to_lowercase()
+    }
 }
 
 fn default_prefix() -> String {
@@ -128,7 +137,10 @@ impl Project {
     pub async fn group(&self) -> io::Result<String> {
         let mcmod = self.mcmod_json().await?;
         let prefix = &mcmod.prefix;
-        let modid = &mcmod.modid;
+        let modid = mcmod.modid();
+        if prefix.is_empty() {
+            return Ok(modid);
+        }
         Ok(format!( "{prefix}.{modid}"))
     }
 
