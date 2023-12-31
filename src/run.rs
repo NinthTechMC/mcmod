@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 
 use clap::{Parser, ValueEnum};
 use tokio::fs::{self, File};
@@ -12,6 +12,10 @@ pub struct RunCommand {
     /// The side to run
     #[arg(default_value = "client")]
     pub side: Side,
+
+    /// Whether to fully sync before running
+    #[arg(short, long)]
+    pub sync: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -24,7 +28,9 @@ pub enum Side {
 
 impl RunCommand {
     pub async fn run(self, dir: &str) -> io::Result<()> {
-        let sync = SyncCommand { incremental: true };
+        let sync = SyncCommand {
+            incremental: !self.sync,
+        };
         sync.run(dir).await?;
         let project = Project::new_in(dir)?;
         match self.side {
@@ -53,8 +59,24 @@ async fn agree_to_eula(project: &Project) -> io::Result<()> {
             }
         }
     }
-    println!("Automatically agreeing to EULA to run the server.");
-    println!("Please read the EULA at https://account.mojang.com/documents/minecraft_eula");
+
+    let env = std::env::var("MCMOD_EULA_AUTO_AGREE").unwrap_or_default();
+    if env == "true" || env == "1" {
+        println!("Automatically agreeing to EULA to run the server (because MCMOD_EULA_AUTO_AGREE is set)");
+        println!("Please read the EULA at https://account.mojang.com/documents/minecraft_eula");
+    } else {
+        println!("Agreeing to the EULA is required to launch the server");
+        println!("Please read the EULA at https://account.mojang.com/documents/minecraft_eula");
+        println!("You can set MCMOD_EULA_AUTO_AGREE=true to automatically agree to the EULA");
+        print!("Do you want to agree to the EULA? (y/N) ");
+        io::stdout().flush()?;
+        let mut buffer = String::new();
+        let stdin = io::stdin();
+        stdin.read_line(&mut buffer)?;
+        if buffer.trim().to_lowercase() != "y" {
+            return Err(io::Error::new(io::ErrorKind::Other, "EULA not agreed"));
+        }
+    }
 
     File::create(&eula_path)
         .await?
