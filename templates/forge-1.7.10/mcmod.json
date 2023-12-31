@@ -1,0 +1,19 @@
+{
+    "modid": "forge1710template",
+    "template": "forge-1.7.10",
+    "version": "1.0.0",
+    "name": "Forge 1710 Template",
+    "description": "Template for creating mod for 1.7.10",
+    "url": "",
+    "updateUrl": "",
+    "authorList": [
+        "Pistonight"
+    ],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": [],
+    "libs": [
+        
+    ]
+}

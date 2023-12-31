@@ -1,17 +1,9 @@
 # mcmod
-My CLI tool for MC modding
+My CLI tool for MC mod projects
 
 ## Usage
-This tool requires `powershell` (you can install PowerShell 7 on non-Windows and alias it to `powershell`)
+**This usage is just reference for me. I DO NOT recommend you to use this tool since I may fully rewrite it as I wish and introduce breaking changes**
 
-Clone the repo, then add path to this repo to the PATH environment variable, then run `mcmod` in powershell.
-
-## Dev Setup
-Using VSCode, add the following to `.vscode/settings.json`. Replace `<FULL_PATH_TO>` with the full path to the repo.
-```json
-{
-    "python.analysis.extraPaths": [
-        "<FULL_PATH_TO>/mcmod/modules"
-    ]
-}
-```
+1. Clone the repo
+2. `cargo build --release`
+3. Add `/path/to/repo/target/release` to `PATH`
