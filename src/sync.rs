@@ -87,7 +87,7 @@ async fn ensure_modid(project: &Project) -> io::Result<()> {
 
 /// Find the modid using the source directory
 async fn find_modid_from_source(project: &Project) -> io::Result<String> {
-    let source_root = project.source_root();
+    let source_root = project.source_root().await?;
     let mut dir = fs::read_dir(&source_root).await?;
     let mut modid = None;
     while let Some(entry) = dir.next_entry().await? {
@@ -122,9 +122,10 @@ async fn update_modid_in_source_files(project: &Project, old_modid: &str) -> io:
     let new_modid = &project.mcmod_json().await?.modid;
     println!("updating modid from '{old_modid}' to '{new_modid}'");
 
-    let mut old_source_root = project.source_root();
+    let source_root = project.source_root().await?;
+    let mut old_source_root = source_root.clone();
     old_source_root.push(old_modid);
-    let mut new_source_root = project.source_root();
+    let mut new_source_root = source_root;
     new_source_root.push(new_modid);
 
     println!(
@@ -218,7 +219,7 @@ async fn write_version_to_java(project: &Project) -> io::Result<()> {
     let group = project.group().await?;
     let group_internal = group.replace('.', "/");
 
-    let mut source_root = project.source_root();
+    let mut source_root = project.source_root().await?;
     source_root.push(modid);
     let modinfo_java = source_root.join("ModInfo.java");
 
@@ -285,7 +286,7 @@ async fn update_build_gradle(project: &Project) -> io::Result<()> {
     let archive_base = name.to_ascii_lowercase().replace(" ", "-");
     let group = project.group().await?;
 
-    let mut coremod_root = project.source_root();
+    let mut coremod_root = project.source_root().await?;
     coremod_root.push(&mcmod.modid);
     coremod_root.push("coremod");
     let coremod_section = if coremod_root.exists() {
@@ -342,7 +343,7 @@ async fn write_build_ninja(file: &Path, project: &Project) -> io::Result<()> {
 
     let cp = ninja_copy_rule().description("Copying $in").add_to(&ninja);
 
-    let source_root = project.source_root();
+    let source_root = project.root.join("src");
 
     let mut target_root = project.forge_root();
     target_root.push("src");

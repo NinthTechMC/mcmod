@@ -8,8 +8,6 @@ use serde_json::json;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-pub static GROUP_PREFIX: &str = "pistonmc";
-
 #[derive(Debug)]
 pub struct Project {
     /// Root directory of the project
@@ -36,6 +34,13 @@ pub struct Mcmod {
     pub screenshots: Vec<String>,
     pub dependencies: Vec<String>,
     pub libs: Vec<String>,
+
+    #[serde(default = "default_prefix")]
+    pub prefix: String,
+}
+
+fn default_prefix() -> String {
+    "pistonmc".to_string()
 }
 
 impl Project {
@@ -103,10 +108,13 @@ impl Project {
         Ok(())
     }
 
-    pub fn source_root(&self) -> PathBuf {
+    pub async fn source_root(&self) -> io::Result<PathBuf> {
         let mut p = self.root.join("src");
-        p.push(GROUP_PREFIX);
-        p
+        let mcmod = self.mcmod_json().await?;
+        for part in mcmod.prefix.split('.') {
+            p.push(part);
+        }
+        Ok(p)
     }
 
     pub fn forge_root(&self) -> PathBuf {
@@ -118,11 +126,10 @@ impl Project {
     }
 
     pub async fn group(&self) -> io::Result<String> {
-        Ok(format!(
-            "{}.{}",
-            GROUP_PREFIX,
-            self.mcmod_json().await?.modid
-        ))
+        let mcmod = self.mcmod_json().await?;
+        let prefix = &mcmod.prefix;
+        let modid = &mcmod.modid;
+        Ok(format!( "{prefix}.{modid}"))
     }
 
     pub async fn java_version(&self) -> io::Result<u32> {
