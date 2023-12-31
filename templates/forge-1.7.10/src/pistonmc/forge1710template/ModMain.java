@@ -5,7 +5,7 @@ import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.Mod.EventHandler;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
 
-@Mod(modid = ModInfo.Id, version = ModInfo.Version)
+@Mod(modid = ModInfo.ID, version = ModInfo.VERSION)
 public class ModMain
 {
 
