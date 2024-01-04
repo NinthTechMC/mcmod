@@ -1,0 +1,8 @@
+{
+    "forge-1.7.10": {
+        "url": "https://github.com/BlockPiston/mcmod-forge-1.7.10",
+        "branch": "main",
+        "path": "forge",
+        "name": "mcmod-forge-1.7.10"
+    }
+}

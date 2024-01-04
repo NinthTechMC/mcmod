@@ -1,9 +1,13 @@
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use tokio::fs;
+
+use crate::util::IoResult;
 
 #[derive(Debug, Parser)]
 pub struct InitCommand {
@@ -11,8 +15,16 @@ pub struct InitCommand {
     pub template: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Repo {
+    url: String,
+    branch: String,
+    path: String,
+    name: String,
+}
+
 impl InitCommand {
-    pub async fn run(self, dir: &str) -> io::Result<()> {
+    pub async fn run(self, dir: &str) -> IoResult<()> {
         let template = match self.template {
             Some(t) => t,
             None => {
@@ -25,18 +37,36 @@ impl InitCommand {
 
         if !path.exists() {
             list_templates()?;
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("Could not find template '{}'", template),
-            ));
+            ))?;
         }
+
+        let template_repo = template_root.join("repos.json");
+        let repo = {
+            let repos_str = fs::read_to_string(template_repo).await?;
+            let mut repos: BTreeMap<String, Repo> =
+                serde_json::from_str(&repos_str).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Failed to parse repos.json: {}", e),
+                    )
+                })?;
+            repos.remove(&template).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Could not find template '{}' in repos", template),
+                )
+            })?
+        };
 
         if Path::new(dir).exists() {
             if fs::read_dir(dir).await?.next_entry().await?.is_some() {
-                return Err(io::Error::new(
+                Err(io::Error::new(
                     io::ErrorKind::AlreadyExists,
                     format!("Directory '{}' is not empty", dir),
-                ));
+                ))?;
             }
             fs::remove_dir_all(dir).await?;
         }
@@ -53,18 +83,39 @@ impl InitCommand {
             for e in r {
                 eprintln!("  {}", e);
             }
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::Other,
                 "Failed to copy all files",
-            ));
+            ))?;
         }
 
         let status = Command::new("git").args(["-C", dir, "init"]).status()?;
         if !status.success() {
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::Other,
                 "Failed to initialize git repository",
-            ));
+            ))?;
+        }
+
+        let status = Command::new("git")
+            .args([
+                "-C",
+                dir,
+                "submodule",
+                "add",
+                "--branch",
+                &repo.branch,
+                "--name",
+                &repo.name,
+                &repo.url,
+                &repo.path,
+            ])
+            .status()?;
+        if !status.success() {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Failed to add submodule",
+            ))?;
         }
 
         println!();
@@ -78,8 +129,8 @@ impl InitCommand {
     }
 }
 
-fn templates_path() -> io::Result<PathBuf> {
-    let exe = std::env::current_exe()?; // X/target/profile/mcmod
+fn templates_path() -> IoResult<PathBuf> {
+    let exe = std::env::current_exe()?;
     let root = exe
         .parent() // X/target/profile
         .and_then(|x| x.parent()) // X/target
@@ -89,11 +140,11 @@ fn templates_path() -> io::Result<PathBuf> {
         None => Err(io::Error::new(
             io::ErrorKind::NotFound,
             "Could not find templates directory",
-        )),
+        ))?,
     }
 }
 
-fn list_templates() -> io::Result<()> {
+fn list_templates() -> IoResult<()> {
     let path = templates_path()?;
     let mut templates = Vec::new();
     for entry in path.read_dir()? {

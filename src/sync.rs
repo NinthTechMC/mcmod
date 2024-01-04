@@ -16,7 +16,7 @@ use ninja_writer::*;
 use quick_xml::{Reader, Writer};
 use reqwest::Client;
 
-use crate::util::Project;
+use crate::util::{IoResult, Project};
 
 #[derive(Debug, Parser)]
 pub struct SyncCommand {
@@ -29,7 +29,7 @@ pub struct SyncCommand {
 }
 
 impl SyncCommand {
-    pub async fn run(mut self, dir: &str) -> io::Result<()> {
+    pub async fn run(mut self, dir: &str) -> IoResult<()> {
         let project = Project::new_in(dir)?;
         let decomp_marker = project.forge_root().join(".decomp-workspace");
         if !decomp_marker.exists() && !self.incremental {
@@ -57,7 +57,7 @@ impl SyncCommand {
     }
 }
 
-async fn sync_source(project: &Project, incremental: bool) -> io::Result<()> {
+async fn sync_source(project: &Project, incremental: bool) -> IoResult<()> {
     println!("syncing source");
     let build_ninja = project.root.join("build.ninja");
     if !build_ninja.exists() || !incremental {
@@ -72,12 +72,12 @@ async fn sync_source(project: &Project, incremental: bool) -> io::Result<()> {
     let result = Command::new("ninja").current_dir(&project.root).status()?;
 
     if !result.success() {
-        return Err(io::Error::new(io::ErrorKind::Other, "ninja failed"));
+        Err(io::Error::new(io::ErrorKind::Other, "ninja failed"))?;
     }
     Ok(())
 }
 
-async fn update_gradle(project: &Project) -> io::Result<()> {
+async fn update_gradle(project: &Project) -> IoResult<()> {
     let mcmod = project.mcmod_json().await?;
 
     let gradle_generated_root = {
@@ -109,13 +109,16 @@ async fn update_gradle(project: &Project) -> io::Result<()> {
     join_set.spawn(group_gradle_future);
 
     while let Some(result) = join_set.join_next().await {
-        result??;
+        match result {
+            Ok(result) => result?,
+            Err(e) => Err(io::Error::from(e))?,
+        }
     }
 
     Ok(())
 }
 
-async fn write_compatibility_gradle(gradle_generated_root: PathBuf, java: u32) -> io::Result<()> {
+async fn write_compatibility_gradle(gradle_generated_root: PathBuf, java: u32) -> IoResult<()> {
     let compability_str = {
         let version = if java == 8 {
             "1.8".to_string()
@@ -141,7 +144,7 @@ targetCompatibility = {version}
 async fn write_coremod_gradle(
     gradle_generated_root: PathBuf,
     coremod: Option<String>,
-) -> io::Result<()> {
+) -> IoResult<()> {
     let coremod_str = match coremod {
         Some(class) => {
             format!(
@@ -173,7 +176,7 @@ async fn write_group_gradle(
     code_modid: String,
     code_version: String,
     code_group: String,
-) -> io::Result<()> {
+) -> IoResult<()> {
     let code_group_internal = code_group.replace('.', "/");
 
     let group_str = format!(
@@ -202,7 +205,7 @@ minecraft {{
     Ok(())
 }
 
-async fn write_build_ninja(file: &Path, project: &Project) -> io::Result<()> {
+async fn write_build_ninja(file: &Path, project: &Project) -> IoResult<()> {
     let ninja = Ninja::new();
     ninja.comment("Incremental build file for copying source and assets");
     ninja.comment("Please run `mcmod sync` to update this file when file structure changes");
@@ -252,7 +255,7 @@ async fn add_copy_edge(
     target_root: Arc<PathBuf>,
     cp: RuleRef,
     path: PathBuf,
-) -> io::Result<()> {
+) -> IoResult<()> {
     let source_path = source_root.join(&path);
     let target_path = target_root.join(&path);
     if source_path.is_dir() {
@@ -269,7 +272,10 @@ async fn add_copy_edge(
             join_set.spawn(async move { add_copy_edge(source_root, target_root, cp, path).await });
         }
         while let Some(result) = join_set.join_next().await {
-            result??;
+            match result {
+                Ok(result) => result?,
+                Err(e) => Err(io::Error::from(e))?,
+            }
         }
     } else {
         cp.build([escape_build(&target_path.display().to_string())])
@@ -289,7 +295,7 @@ fn ninja_copy_rule() -> Rule {
     Rule::new("cp", "cp $in $out")
 }
 
-async fn sync_libs(project: &Project) -> io::Result<()> {
+async fn sync_libs(project: &Project) -> IoResult<()> {
     let libs_root = project.forge_root().join("libs");
     if !libs_root.exists() {
         fs::create_dir_all(&libs_root).await?;
@@ -303,9 +309,13 @@ async fn sync_libs(project: &Project) -> io::Result<()> {
             Some(name) => name,
             None => continue,
         };
-        match needs_download.iter().position(|lib| { 
+        match needs_download.iter().position(|lib| {
             if lib.starts_with("http") {
-                Path::new(lib).file_name().and_then(|s| s.to_str()).map(|s| s == name).unwrap_or(false)
+                Path::new(lib)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s == name)
+                    .unwrap_or(false)
             } else {
                 lib == &name
             }
@@ -322,7 +332,7 @@ async fn sync_libs(project: &Project) -> io::Result<()> {
         }
     }
     let mut join_set = JoinSet::new();
-    let (send, mut recv) = mpsc::channel::<io::Result<String>>(100);
+    let (send, mut recv) = mpsc::channel::<IoResult<String>>(100);
     let client = Arc::new(Client::new());
     join_set.spawn(async move {
         let mut error = None;
@@ -350,12 +360,10 @@ async fn sync_libs(project: &Project) -> io::Result<()> {
             let url = lib.to_owned();
             let file_name = match Path::new(&url).file_name() {
                 Some(name) => name,
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Cannot find file name in url '{url}'"),
-                    ));
-                }
+                None => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Cannot find file name in url '{url}'"),
+                ))?,
             };
             let path = libs_root.join(file_name);
             (url, path)
@@ -375,17 +383,20 @@ async fn sync_libs(project: &Project) -> io::Result<()> {
     }
     drop(send);
     while let Some(result) = join_set.join_next().await {
-        result??;
+        match result {
+            Ok(result) => result?,
+            Err(e) => Err(io::Error::from(e))?,
+        }
     }
     Ok(())
 }
 
-async fn download_devjar(client: Arc<Client>, url: &str, path: &Path) -> io::Result<()> {
+async fn download_devjar(client: Arc<Client>, url: &str, path: &Path) -> IoResult<()> {
     let bytes_result = async { client.get(url).send().await?.bytes().await }.await;
 
     let bytes = match bytes_result {
         Ok(response) => response,
-        Err(e) => return Err(io::Error::new(io::ErrorKind::Other, e)),
+        Err(e) => Err(io::Error::new(io::ErrorKind::Other, e))?,
     };
 
     File::create(path).await?.write_all(&bytes).await?;
@@ -393,7 +404,7 @@ async fn download_devjar(client: Arc<Client>, url: &str, path: &Path) -> io::Res
     Ok(())
 }
 
-async fn update_eclipse(project: &Project) -> io::Result<()> {
+async fn update_eclipse(project: &Project) -> IoResult<()> {
     project.run_gradlew(&["eclipse"]).await?;
     let output_file = project.root.join(".classpath");
     let writer = std::io::BufWriter::new(std::fs::File::create(&output_file)?);
@@ -455,7 +466,7 @@ async fn update_eclipse(project: &Project) -> io::Result<()> {
     .await;
 
     if let Err(e) = result {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+        Err(io::Error::new(io::ErrorKind::InvalidData, e))?;
     }
 
     fs::remove_file(classpath_file).await?;
@@ -463,12 +474,10 @@ async fn update_eclipse(project: &Project) -> io::Result<()> {
     let output_file = project.root.join(".project");
     let project_name = match project.root.file_name().and_then(|s| s.to_str()) {
         Some(name) => name,
-        None => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Cannot determine project name from root path",
-            ));
-        }
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Cannot determine project name from root path",
+        ))?,
     };
     let writer = std::io::BufWriter::new(std::fs::File::create(&output_file)?);
     let project_file = project.forge_root().join(".project");
@@ -519,7 +528,7 @@ async fn update_eclipse(project: &Project) -> io::Result<()> {
     fs::remove_file(project_file).await?;
 
     if let Err(e) = result {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, e));
+        Err(io::Error::new(io::ErrorKind::InvalidData, e))?;
     }
 
     Ok(())

@@ -5,7 +5,7 @@ use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
 
 use crate::sync::SyncCommand;
-use crate::util::Project;
+use crate::util::{IoResult, Project};
 
 #[derive(Debug, Parser)]
 pub struct RunCommand {
@@ -27,7 +27,7 @@ pub enum Side {
 }
 
 impl RunCommand {
-    pub async fn run(self, dir: &str) -> io::Result<()> {
+    pub async fn run(self, dir: &str) -> IoResult<()> {
         let sync = SyncCommand {
             incremental: !self.sync,
         };
@@ -47,7 +47,7 @@ impl RunCommand {
     }
 }
 
-async fn agree_to_eula(project: &Project) -> io::Result<()> {
+async fn agree_to_eula(project: &Project) -> IoResult<()> {
     let mut eula_path = project.forge_root();
     eula_path.push("run");
     eula_path.push("eula.txt");
@@ -74,7 +74,7 @@ async fn agree_to_eula(project: &Project) -> io::Result<()> {
         let stdin = io::stdin();
         stdin.read_line(&mut buffer)?;
         if buffer.trim().to_lowercase() != "y" {
-            return Err(io::Error::new(io::ErrorKind::Other, "EULA not agreed"));
+            Err(io::Error::new(io::ErrorKind::Other, "EULA not agreed"))?;
         }
     }
 

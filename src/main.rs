@@ -1,5 +1,3 @@
-use std::io;
-
 use clap::{Parser, Subcommand};
 
 mod build;
@@ -11,13 +9,14 @@ mod util;
 use init::InitCommand;
 use run::RunCommand;
 use sync::SyncCommand;
+use util::IoResult;
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = cli.run().await {
-        eprintln!("error: {}", e);
+        eprintln!("error: {:?}", e);
         std::process::exit(1);
     }
 }
@@ -35,7 +34,7 @@ pub struct Cli {
 }
 
 impl Cli {
-    pub async fn run(self) -> io::Result<()> {
+    pub async fn run(self) -> IoResult<()> {
         match self.command {
             CliCommand::Sync(sync) => sync.run(&self.dir).await,
             CliCommand::Init(init) => init.run(&self.dir).await,

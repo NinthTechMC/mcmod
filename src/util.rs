@@ -9,6 +9,8 @@ use serde_json::json;
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
 
+pub type IoResult<T> = error_stack::Result<T, io::Error>;
+
 #[derive(Debug)]
 pub struct Project {
     /// Root directory of the project
@@ -80,17 +82,17 @@ impl Mcmod {
 
 impl Project {
     /// Initialize a new project context in the given directory
-    pub fn new_in(dir: &str) -> io::Result<Self> {
+    pub fn new_in(dir: &str) -> IoResult<Self> {
         let path = dunce::canonicalize(Path::new(dir))?;
         let mut cur_path = path.as_ref();
         while !path.join("mcmod.json").exists() {
             if let Some(parent) = path.parent() {
                 cur_path = parent;
             } else {
-                return Err(io::Error::new(
+                Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     "Could not find project root",
-                ));
+                ))?;
             }
         }
         Ok(Self::new_root(cur_path.to_path_buf()))
@@ -104,7 +106,7 @@ impl Project {
     }
 
     /// Get the mcmod.json data
-    pub async fn mcmod_json(&self) -> io::Result<&Mcmod> {
+    pub async fn mcmod_json(&self) -> IoResult<&Mcmod> {
         if let Some(x) = self.mcmod.get() {
             return Ok(x);
         }
@@ -112,12 +114,12 @@ impl Project {
         let mcmod = fs::read_to_string(mcmod_path).await?;
         let mcmod: Mcmod = match serde_json::from_str(&mcmod) {
             Ok(mcmod) => mcmod,
-            Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e))?,
         };
         Ok(self.mcmod.get_or_init(|| mcmod))
     }
 
-    pub async fn write_mcmod_info(&self) -> io::Result<()> {
+    pub async fn write_mcmod_info(&self) -> IoResult<()> {
         let mcmod = self.mcmod_json().await?;
         let info = json!([{
             "modid": mcmod.modid,
@@ -133,7 +135,10 @@ impl Project {
             "screenshots": mcmod.screenshots,
             "dependencies": mcmod.dependencies,
         }]);
-        let info_str = serde_json::to_string_pretty(&info)?;
+        let info_str = match serde_json::to_string_pretty(&info) {
+            Ok(x) => x,
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e))?,
+        };
         let mut info_path = self.forge_root();
         info_path.push("src");
         info_path.push("main");
@@ -146,7 +151,7 @@ impl Project {
         Ok(())
     }
 
-    pub async fn write_pack_mcmeta(&self) -> io::Result<()> {
+    pub async fn write_pack_mcmeta(&self) -> IoResult<()> {
         let mcmod = self.mcmod_json().await?;
         let pack = json!({
             "pack": {
@@ -154,7 +159,10 @@ impl Project {
                 "description": format!("Resources used for {}", mcmod.name),
             }
         });
-        let pack_str = serde_json::to_string_pretty(&pack)?;
+        let pack_str = match serde_json::to_string_pretty(&pack) {
+            Ok(x) => x,
+            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e))?,
+        };
         let mut pack_path = self.forge_root();
         pack_path.push("src");
         pack_path.push("main");
@@ -171,7 +179,7 @@ impl Project {
         self.root.join("src")
     }
 
-    pub async fn source_group(&self) -> io::Result<String> {
+    pub async fn source_group(&self) -> IoResult<String> {
         let mut current = self.source_root();
         let mut source_group = String::new();
         // if current contains a single entry and is dir, continue go into it
@@ -191,12 +199,10 @@ impl Project {
                 let file_name = entry.file_name();
                 let name = match file_name.to_str() {
                     Some(x) => x,
-                    None => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "Invalid source group name",
-                        ))
-                    }
+                    None => Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid source group name",
+                    ))?,
                 };
                 source_group.push_str(name);
             } else {
@@ -216,17 +222,15 @@ impl Project {
         self.root.join("assets")
     }
 
-    pub async fn run_gradlew(&self, args: &[&str]) -> io::Result<()> {
+    pub async fn run_gradlew(&self, args: &[&str]) -> IoResult<()> {
         let java_version = self.mcmod_json().await?.java;
         let jdk_home = format!("JDK{java_version}_HOME");
         let jdk_home = match std::env::var(&jdk_home) {
             Ok(x) => x,
-            Err(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Could not find {jdk_home} environment variable"),
-                ))
-            }
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Could not find {jdk_home} environment variable"),
+            ))?,
         };
         let java_home = Path::new(&jdk_home);
         let gradlew = if cfg!(windows) {
@@ -241,7 +245,7 @@ impl Project {
             .env("JAVA_HOME", java_home)
             .status()?;
         if !status.success() {
-            return Err(io::Error::new(io::ErrorKind::Other, "gradlew failed"));
+            Err(io::Error::new(io::ErrorKind::Other, "gradlew failed"))?;
         }
         Ok(())
     }
