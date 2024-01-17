@@ -96,6 +96,7 @@ async fn update_gradle(project: &Project) -> IoResult<()> {
     join_set.spawn(write_coremod_gradle(
         gradle_generated_root.clone(),
         mcmod.coremod.as_ref().cloned(),
+        mcmod.access_transformer.as_ref().cloned(),
     ));
     let group_gradle_future = write_group_gradle(
         gradle_generated_root,
@@ -144,25 +145,24 @@ targetCompatibility = {version}
 async fn write_coremod_gradle(
     gradle_generated_root: PathBuf,
     coremod: Option<String>,
+    access_transformer: Option<String>,
 ) -> IoResult<()> {
-    let coremod_str = match coremod {
-        Some(class) => {
-            format!(
-                r###"jar {{
-    manifest {{
-       attributes 'FMLCorePlugin': '{class}'
-       attributes 'FMLCorePluginContainsFMLMod': 'true'
-    }}
-}}
-"###
-            )
-        }
-        None => "".to_owned(),
-    };
+    let mut output_str = String::new();
+    output_str.push_str("jar {\n");
+    output_str.push_str("    manifest {\n");
+    if let Some(class) = coremod {
+        output_str.push_str(&format!("        attributes 'FMLCorePlugin': '{class}'\n"));
+        output_str.push_str(&format!("        attributes 'FMLCorePluginContainsFMLMod': 'true'\n"));
+    }
+    if let Some(transformer) = access_transformer {
+        output_str.push_str(&format!("        attributes 'AccessTransformer': '{transformer}'\n"));
+    }
+    output_str.push_str("    }\n");
+    output_str.push_str("}\n");
 
     File::create(gradle_generated_root.join("coremod.gradle"))
         .await?
-        .write_all(coremod_str.as_bytes())
+        .write_all(output_str.as_bytes())
         .await?;
 
     Ok(())

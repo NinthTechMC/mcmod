@@ -32,6 +32,8 @@ pub struct Mcmod {
     pub gradle_override: Option<GradleOverride>,
     /// The coremod class
     pub coremod: Option<String>,
+    /// The access transformer file
+    pub access_transformer: Option<String>,
     /// Libraries to download
     pub libs: Vec<String>,
 
