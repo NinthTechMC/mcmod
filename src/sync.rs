@@ -228,19 +228,20 @@ async fn write_build_ninja(file: &Path, project: &Project) -> IoResult<()> {
     .await?;
 
     let assets_root = project.assets_root();
-
-    let mut target_root = project.forge_root();
-    target_root.push("src");
-    target_root.push("main");
-    target_root.push("resources");
-    target_root.push("assets");
-    add_copy_edge(
-        Arc::new(assets_root),
-        Arc::new(target_root),
-        cp,
-        PathBuf::new(),
-    )
-    .await?;
+    if assets_root.exists() {
+        let mut target_root = project.forge_root();
+        target_root.push("src");
+        target_root.push("main");
+        target_root.push("resources");
+        target_root.push("assets");
+        add_copy_edge(
+            Arc::new(assets_root),
+            Arc::new(target_root),
+            cp,
+            PathBuf::new(),
+        )
+        .await?;
+    }
 
     File::create(file)
         .await?
@@ -439,7 +440,14 @@ async fn update_eclipse(project: &Project) -> IoResult<()> {
                                     attr.value = Cow::Borrowed(b"src");
                                 }
                                 b"src/main/resources" => {
-                                    attr.value = Cow::Borrowed(b"assets");
+                                    // if assets don't exist, add forge prefix
+                                    let assets_dir = project.assets_root();
+                                    let exists = assets_dir.exists();
+                                    if exists {
+                                        attr.value = Cow::Borrowed(b"assets");
+                                    } else {
+                                        attr.value = Cow::Borrowed(b"forge/src/main/resources");
+                                    }
                                     let attr = attributes
                                         .iter_mut()
                                         .find(|k| k.key.as_ref() == b"output")

@@ -11,6 +11,7 @@
         "archiveBaseName": "default is name.replace('', '-').lower()"
     },
     "_coremod": "remove the _ and put the coremod class here",
+	"_accessTransformer": "remove the _ and put the value for the AccessTransformer property here",
     "name": "Forge 1710 Template",
     "description": "Template for creating mod for 1.7.10",
     "url": "",
