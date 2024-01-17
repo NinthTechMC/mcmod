@@ -152,10 +152,14 @@ async fn write_coremod_gradle(
     output_str.push_str("    manifest {\n");
     if let Some(class) = coremod {
         output_str.push_str(&format!("        attributes 'FMLCorePlugin': '{class}'\n"));
-        output_str.push_str(&format!("        attributes 'FMLCorePluginContainsFMLMod': 'true'\n"));
+        output_str.push_str(&format!(
+            "        attributes 'FMLCorePluginContainsFMLMod': 'true'\n"
+        ));
     }
     if let Some(transformer) = access_transformer {
-        output_str.push_str(&format!("        attributes 'AccessTransformer': '{transformer}'\n"));
+        output_str.push_str(&format!(
+            "        attributes 'AccessTransformer': '{transformer}'\n"
+        ));
     }
     output_str.push_str("    }\n");
     output_str.push_str("}\n");
@@ -311,7 +315,7 @@ async fn sync_libs(project: &Project) -> IoResult<()> {
             None => continue,
         };
         match needs_download.iter().position(|lib| {
-            if lib.starts_with("http") {
+            if lib.starts_with("http") || lib.starts_with("./") {
                 Path::new(lib)
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -357,6 +361,19 @@ async fn sync_libs(project: &Project) -> IoResult<()> {
         }
     });
     for lib in needs_download {
+        if lib.starts_with("./") {
+            let file_name = match Path::new(lib).file_name() {
+                Some(name) => name,
+                None => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Cannot find file name in path '{lib}'"),
+                ))?,
+            };
+            println!("copying '{lib}'");
+            let path = libs_root.join(file_name);
+            fs::copy(lib, path).await?;
+            continue;
+        }
         let (url, path) = if lib.starts_with("http") {
             let url = lib.to_owned();
             let file_name = match Path::new(&url).file_name() {

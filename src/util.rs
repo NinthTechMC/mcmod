@@ -145,6 +145,9 @@ impl Project {
         info_path.push("src");
         info_path.push("main");
         info_path.push("resources");
+        if !info_path.exists() {
+            fs::create_dir_all(&info_path).await?;
+        }
         info_path.push("mcmod.info");
         File::create(info_path)
             .await?
