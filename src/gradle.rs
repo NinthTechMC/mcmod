@@ -19,7 +19,10 @@ pub async fn merge_properties(
         for line in fs::read_to_string(gradle_properties).await?.lines() {
             let mut parts = line.splitn(2, '=');
             if let Some(key) = parts.next() {
-                let key = key.trim();
+                let mut key = key.trim();
+                if key.starts_with("# ") {
+                    key = &key[2..];
+                }
                 if let Some(value) = to_merge.remove(key) {
                     new_gradle_properties.push_str(&format!("{key} = {value}\n"));
                     continue;

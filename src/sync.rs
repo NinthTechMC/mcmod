@@ -116,6 +116,8 @@ impl SyncCommand {
         println!("syncing eclipse");
         sync_eclipse_workspace(template_handler.as_ref(), &project).await?;
 
+        println!("sync done");
+
         Ok(())
     }
 }
@@ -312,6 +314,7 @@ async fn sync_eclipse_workspace(
     project: &Project,
 ) -> IoResult<()> {
     template_handler.setup_eclipse(project).await?;
+    println!("remapping .classpath");
     let output_file = project.root.join(".classpath");
     let writer = std::io::BufWriter::new(std::fs::File::create(&output_file)?);
     let classpath_file = project.target_root().join(".classpath");
@@ -331,10 +334,14 @@ async fn sync_eclipse_workspace(
                         // collect attributes
                         let mut attributes = Vec::new();
                         let mut path = None;
+                        let mut is_src = false;
                         for attr in e.attributes() {
                             let attr = attr?;
                             if attr.key.as_ref() == b"path" {
                                 path = Some(attributes.len());
+                            } else if attr.key.as_ref() == b"kind" && attr.value.as_ref() == b"src"
+                            {
+                                is_src = true;
                             }
                             attributes.push(attr);
                         }
@@ -359,7 +366,13 @@ async fn sync_eclipse_workspace(
                                         .unwrap();
                                     attr.value = Cow::Borrowed(b"bin/assets");
                                 }
-                                _ => {}
+                                _ => {
+                                    if is_src {
+                                        let mut new_path = b"target/".to_vec();
+                                        new_path.extend_from_slice(attr.value.as_ref());
+                                        attr.value = Cow::Owned(new_path);
+                                    }
+                                }
                             }
                         }
                         let mut e = BytesStart::new("classpathentry");

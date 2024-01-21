@@ -43,6 +43,11 @@ impl Template {
 
 #[async_trait(?Send)]
 pub trait TemplateHandler {
+    /// Get the MC version this template is for
+    fn mc_version(&self) -> &'static str;
+    /// The version key to use in mcmod.info. This is needed because different templates
+    /// have different build scripts
+    fn mcmod_version_key(&self) -> &'static str;
     /// Called to setup the template after cloning.
     ///
     /// Templates usually run "setupDecompWorkspace" here, but there can be extra setup steps.

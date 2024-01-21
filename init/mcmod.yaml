@@ -72,3 +72,7 @@ copy-paths:
 - [assets, src/main/resources/assets]
 - [meta, src/main/resources/META-INF]
 # - dependencies.gradle # same as [dependencies.gradle, dependencies.gradle]
+
+# Suffixes to exclude from copying
+copy-exclude:
+- _GENERATED.java

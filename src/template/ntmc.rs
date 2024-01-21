@@ -12,6 +12,14 @@ use super::TemplateHandler;
 pub struct Ntmc1710Handler;
 #[async_trait(?Send)]
 impl TemplateHandler for Ntmc1710Handler {
+    fn mc_version(&self) -> &'static str {
+        "1.7.10"
+    }
+
+    fn mcmod_version_key(&self) -> &'static str {
+        "version"
+    }
+
     async fn run_gradlew(&self, project: &Project, args: &[&str]) -> IoResult<()> {
         gradle::run_gradlew(&project.target_root(), 8, args).await
     }

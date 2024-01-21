@@ -78,6 +78,9 @@ pub struct Mcmod {
     /// Paths to copy to the template
     #[serde(default)]
     pub copy_paths: Vec<CopySpec>,
+    /// Paths suffixes to exclude from copying
+    #[serde(default)]
+    pub copy_exclude: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,12 +111,14 @@ impl Mcmod {
 
     /// Create the content of the mcmod.info file
     pub fn create_mcmod_info(&self) -> IoResult<String> {
+        let handler = self.template.new_handler();
+        let version = format!("${{{}}}", handler.mcmod_version_key());
         let info = json!([{
             "modid": self.modid,
             "name": self.name,
             "description": self.description,
-            "version": "${version}",
-            "mcversion": "${mcversion}",
+            "version": version,
+            "mcversion": handler.mc_version(),
             "url": self.url,
             "updateUrl": self.update_url,
             "authorList": self.authors,
@@ -171,6 +176,8 @@ impl Mcmod {
             }
         }
 
+        let exclude: Arc<[String]> = Arc::from(self.copy_exclude.as_slice());
+
         for copy_path in &self.copy_paths {
             let (source, target) = match copy_path {
                 CopySpec::Simple(s) => (s, s),
@@ -191,8 +198,11 @@ impl Mcmod {
             }
             let source = Arc::new(source);
             let target = Arc::new(target_root.join(target));
+            let exclude = Arc::clone(&exclude);
             let cp = cp.clone();
-            join_set.spawn(async move { add_copy_edge(source, target, cp, PathBuf::new()).await });
+            join_set.spawn(async move {
+                add_copy_edge(source, target, cp, PathBuf::new(), exclude).await
+            });
         }
         join_join_set!(join_set).await?;
 
@@ -206,9 +216,17 @@ async fn add_copy_edge(
     target_root: Arc<PathBuf>,
     cp: RuleRef,
     path: PathBuf,
+    exclude: Arc<[String]>,
 ) -> IoResult<()> {
     let source_path = source_root.join(&path);
     let target_path = target_root.join(&path);
+
+    let path_str = source_path.display().to_string();
+
+    if exclude.iter().any(|x| path_str.ends_with(x)) {
+        return Ok(());
+    }
+
     if source_path.is_dir() {
         if !target_path.exists() {
             fs::create_dir_all(&target_path).await?;
@@ -219,8 +237,11 @@ async fn add_copy_edge(
             let path = path.join(entry.file_name());
             let source_root = Arc::clone(&source_root);
             let target_root = Arc::clone(&target_root);
+            let exclude = Arc::clone(&exclude);
             let cp = cp.clone();
-            join_set.spawn(async move { add_copy_edge(source_root, target_root, cp, path).await });
+            join_set.spawn(async move {
+                add_copy_edge(source_root, target_root, cp, path, exclude).await
+            });
         }
         join_join_set!(join_set).await?;
     } else {
