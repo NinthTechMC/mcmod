@@ -6,7 +6,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::sync::SyncCommand;
 use crate::template::TemplateHandler;
-use crate::util::{IoResult, Project, cd};
+use crate::util::{cd, IoResult, Project};
 
 #[derive(Debug, Parser)]
 pub struct RunCommand {
@@ -39,16 +39,22 @@ impl RunCommand {
         let project = Project::new_in(dir)?;
         let template_handler = project.mcmod().await?.template.new_handler();
         if let Some(c) = self.command.strip_prefix("client") {
-            template_handler.run_gradlew(&project, &[&format!("runClient{c}")]).await?;
+            template_handler
+                .run_gradlew(&project, &[&format!("runClient{c}")])
+                .await?;
             return Ok(());
         }
         if let Some(c) = self.command.strip_prefix("server") {
             agree_to_eula(template_handler.as_ref(), &project).await?;
-            template_handler.run_gradlew(&project, &[&format!("runServer{c}")]).await?;
+            template_handler
+                .run_gradlew(&project, &[&format!("runServer{c}")])
+                .await?;
             return Ok(());
         }
 
-        template_handler.run_gradlew(&project, &[&self.command]).await?;
+        template_handler
+            .run_gradlew(&project, &[&self.command])
+            .await?;
         Ok(())
     }
 }

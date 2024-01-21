@@ -16,7 +16,7 @@ use reqwest::Client;
 
 use crate::gradle;
 use crate::template::{self, TemplateHandler};
-use crate::util::{IoResult, Project, write_file, cd, mkdir, join_join_set};
+use crate::util::{cd, join_join_set, mkdir, write_file, IoResult, Project};
 
 #[derive(Debug, Parser)]
 pub struct SyncCommand {
@@ -54,7 +54,9 @@ impl SyncCommand {
 
         let template_updated = template_marked.trim() != template_name;
         if template_updated {
-            println!("template is not initialized or has changed. initializing new target directory");
+            println!(
+                "template is not initialized or has changed. initializing new target directory"
+            );
             let target_root = project.target_root();
             if target_root.exists() {
                 fs::remove_dir_all(&target_root).await?;
@@ -68,15 +70,19 @@ impl SyncCommand {
                 ))?,
             };
             {
-                let status = Command::new("git").args([
-                    "clone",
-                    "--branch", &template_def.branch,
-                    "--depth", "1",
-                    "--recurse-submodules",
-                    "--",
-                    &template_def.url,
-                    target_root.to_str().unwrap(),
-                ]).status()?;
+                let status = Command::new("git")
+                    .args([
+                        "clone",
+                        "--branch",
+                        &template_def.branch,
+                        "--depth",
+                        "1",
+                        "--recurse-submodules",
+                        "--",
+                        &template_def.url,
+                        target_root.to_str().unwrap(),
+                    ])
+                    .status()?;
 
                 if !status.success() {
                     Err(io::Error::new(
@@ -85,7 +91,6 @@ impl SyncCommand {
                     ))?;
                 }
             }
-
         } else {
             println!("using existing target template '{template_name}'");
         }
@@ -117,7 +122,7 @@ impl SyncCommand {
 
 async fn sync_gradle_properties(handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
     println!("updating gradle.properties");
-    let mut properties = handler.make_gradle_properties(&project).await?;
+    let mut properties = handler.make_gradle_properties(project).await?;
     for (k, v) in project.mcmod().await?.gradle_overrides.iter() {
         properties.insert(k.clone(), v.clone());
     }
@@ -134,7 +139,11 @@ async fn sync_source(project: &Project, incremental: bool) -> IoResult<()> {
         if forge_source_root.exists() {
             fs::remove_dir_all(&forge_source_root).await?;
         }
-        let ninja_file = project.mcmod().await?.create_build_ninja(&project.root, &project.target_root()).await?;
+        let ninja_file = project
+            .mcmod()
+            .await?
+            .create_build_ninja(&project.root, &project.target_root())
+            .await?;
         write_file!(&build_ninja, ninja_file).await?;
     }
 
@@ -165,7 +174,7 @@ async fn sync_metadata(project: &Project) -> IoResult<()> {
 }
 
 async fn sync_libs(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
-    let libs_root = template_handler.libs_dir(&project)?;
+    let libs_root = template_handler.libs_dir(project)?;
     let libs = &project.mcmod().await?.libs;
     let cdn_url_prefix = "https://cdn.pistonite.org/minecraft/devjars/";
     sync_downloads(&libs_root, libs, cdn_url_prefix).await?;
@@ -173,7 +182,7 @@ async fn sync_libs(template_handler: &dyn TemplateHandler, project: &Project) ->
 }
 
 async fn sync_mods(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
-    let mods_root = cd!(template_handler.run_dir(&project)?, "mods");
+    let mods_root = cd!(template_handler.run_dir(project)?, "mods");
     let mods = &project.mcmod().await?.mods;
     let cdn_url_prefix = "https://cdn.pistonite.org/minecraft/jars/";
     sync_downloads(&mods_root, mods, cdn_url_prefix).await?;
@@ -201,20 +210,20 @@ async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str)
                 lib == &name
             }
         }) {
-                Some(i) => {
-                    // up to date
-                    needs_download.swap_remove(i);
-                }
-                None => {
-                    let path = entry.path();
-                    println!("removing '{}'", path.display());
-                    if path.is_dir() {
-                        fs::remove_dir_all(path).await?;
-                    } else {
-                        fs::remove_file(path).await?;
-                    }
+            Some(i) => {
+                // up to date
+                needs_download.swap_remove(i);
+            }
+            None => {
+                let path = entry.path();
+                println!("removing '{}'", path.display());
+                if path.is_dir() {
+                    fs::remove_dir_all(path).await?;
+                } else {
+                    fs::remove_file(path).await?;
                 }
             }
+        }
     }
     let mut join_set = JoinSet::new();
     let (send, mut recv) = mpsc::channel::<IoResult<String>>(100);
@@ -298,8 +307,11 @@ async fn download_binary(client: Arc<Client>, url: &str, path: &Path) -> IoResul
     Ok(())
 }
 
-async fn sync_eclipse_workspace(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
-    template_handler.setup_eclipse(&project).await?;
+async fn sync_eclipse_workspace(
+    template_handler: &dyn TemplateHandler,
+    project: &Project,
+) -> IoResult<()> {
+    template_handler.setup_eclipse(project).await?;
     let output_file = project.root.join(".classpath");
     let writer = std::io::BufWriter::new(std::fs::File::create(&output_file)?);
     let classpath_file = project.target_root().join(".classpath");
@@ -397,10 +409,8 @@ async fn sync_eclipse_workspace(template_handler: &dyn TemplateHandler, project:
             let event = reader.read_event_into(&mut buf)?;
             match event {
                 Event::Start(e) => {
-                    if !found_name {
-                        if level == 1 && e.name().as_ref() == b"name" {
-                            found_name = true;
-                        }
+                    if !found_name && level == 1 && e.name().as_ref() == b"name" {
+                        found_name = true;
                     }
                     level += 1;
                     writer.write_event(Event::Start(e))?;
@@ -411,7 +421,7 @@ async fn sync_eclipse_workspace(template_handler: &dyn TemplateHandler, project:
                 }
                 Event::Text(e) => {
                     if found_name {
-                        writer.write_event(Event::Text(BytesText::new(&project_name)))?;
+                        writer.write_event(Event::Text(BytesText::new(project_name)))?;
                         found_name = false;
                     } else {
                         writer.write_event(Event::Text(e))?;

@@ -1,16 +1,19 @@
 //! Gradle stuff
 
-use std::process::Command;
-use std::{path::Path, io};
 use std::collections::BTreeMap;
+use std::process::Command;
+use std::{io, path::Path};
 
 use tokio::fs;
 
-use crate::util::{IoResult, write_file};
+use crate::util::{write_file, IoResult};
 
 /// Merge properties into a gradle.properties file without destroying comments
 /// and existing properties
-pub async fn merge_properties(gradle_properties: &Path, mut to_merge: BTreeMap<String, String>) -> IoResult<()> {
+pub async fn merge_properties(
+    gradle_properties: &Path,
+    mut to_merge: BTreeMap<String, String>,
+) -> IoResult<()> {
     let mut new_gradle_properties = String::new();
     if gradle_properties.exists() {
         for line in fs::read_to_string(gradle_properties).await?.lines() {

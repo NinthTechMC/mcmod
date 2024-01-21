@@ -3,10 +3,10 @@ use std::fmt;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use tokio::{fs, io};
 
-use crate::util::{self, IoResult, cd, Project};
+use crate::util::{self, cd, IoResult, Project};
 
 mod gtnh;
 mod ntmc;
@@ -43,8 +43,13 @@ impl Template {
 
 #[async_trait(?Send)]
 pub trait TemplateHandler {
-    /// Called to setup the template after cloning. Templates may run some gradle command here, etc
-    async fn setup_project(&self, project: &Project) -> IoResult<()>;
+    /// Called to setup the template after cloning.
+    ///
+    /// Templates usually run "setupDecompWorkspace" here, but there can be extra setup steps.
+    async fn setup_project(&self, project: &Project) -> IoResult<()> {
+        self.run_gradlew(project, &["setupDecompWorkspace"]).await?;
+        Ok(())
+    }
     /// Called to setup eclipse workspace
     async fn setup_eclipse(&self, project: &Project) -> IoResult<()> {
         self.run_gradlew(project, &["eclipse"]).await?;
@@ -70,20 +75,21 @@ pub trait TemplateHandler {
         Ok(cd!(project.target_root(), "run"))
     }
     /// Make a map of gradle properties to combine with gradle.properties in the template
-    async fn make_gradle_properties(&self, project: &Project) -> IoResult<BTreeMap<String, String>>;
+    async fn make_gradle_properties(&self, project: &Project)
+        -> IoResult<BTreeMap<String, String>>;
 }
 
 pub async fn read_templates() -> IoResult<BTreeMap<String, TemplateDef>> {
     let templates_json_path = templates_path()?;
     let templates_json = fs::read_to_string(templates_json_path).await?;
-    let templates: BTreeMap<String, TemplateDef> = serde_json::from_str(&templates_json).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Failed to parse templates.json: {}", e),
-        )
-    })?;
+    let templates: BTreeMap<String, TemplateDef> =
+        serde_json::from_str(&templates_json).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse templates.json: {}", e),
+            )
+        })?;
     Ok(templates)
-
 }
 
 pub fn templates_path() -> IoResult<PathBuf> {

@@ -6,7 +6,7 @@ use clap::Parser;
 use tokio::fs;
 
 use crate::template;
-use crate::util::{mkdir, IoResult, confirm_yn, tool_root, cd, write_file};
+use crate::util::{cd, confirm_yn, mkdir, tool_root, write_file, IoResult};
 
 #[derive(Debug, Parser)]
 pub struct InitCommand {
@@ -24,10 +24,7 @@ impl InitCommand {
                 println!("You will be prompted for each file that would be overwritten.");
                 println!("Continue?");
                 if !confirm_yn()? {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Operation cancelled",
-                    ))?;
+                    return Err(io::Error::new(io::ErrorKind::Other, "Operation cancelled"))?;
                 }
             }
         } else {
@@ -60,10 +57,7 @@ impl InitCommand {
 
         templates.remove(&template).ok_or_else(|| {
             println!("Unknown template '{template}'");
-            io::Error::new(
-                io::ErrorKind::Other,
-                "Unknown template",
-            )
+            io::Error::new(io::ErrorKind::Other, "Unknown template")
         })?;
 
         let init_dir = cd!(tool_root()?, "init");
@@ -80,7 +74,11 @@ impl InitCommand {
                 }
             }
             let source_dir = entry.path();
-            println!("copying '{}' to '{}'", entry.file_name().to_string_lossy(), target_path.display());
+            println!(
+                "copying '{}' to '{}'",
+                entry.file_name().to_string_lossy(),
+                target_path.display()
+            );
             if source_dir.is_dir() {
                 let r = copy_dir::copy_dir(&source_dir, &target_path)?;
                 if !r.is_empty() {
@@ -112,4 +110,3 @@ impl InitCommand {
         Ok(())
     }
 }
-

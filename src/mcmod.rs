@@ -8,11 +8,11 @@ use async_recursion::async_recursion;
 use ninja_writer::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::{io, fs};
 use tokio::task::JoinSet;
+use tokio::{fs, io};
 
-use crate::util::{IoResult, Project, join_join_set};
 use crate::template::Template;
+use crate::util::{join_join_set, IoResult, Project};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -183,21 +183,21 @@ impl Mcmod {
             if !source.exists() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("Source path '{}' does not exist. Please remove it from mcmod.yaml", source.display()),
+                    format!(
+                        "Source path '{}' does not exist. Please remove it from mcmod.yaml",
+                        source.display()
+                    ),
                 ))?;
             }
             let source = Arc::new(source);
             let target = Arc::new(target_root.join(target));
             let cp = cp.clone();
-            join_set.spawn(async move {
-                add_copy_edge(source, target, cp, PathBuf::new()).await
-            });
+            join_set.spawn(async move { add_copy_edge(source, target, cp, PathBuf::new()).await });
         }
         join_join_set!(join_set).await?;
 
         Ok(ninja.to_string())
     }
-
 }
 
 #[async_recursion]
