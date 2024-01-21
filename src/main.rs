@@ -1,9 +1,12 @@
 use clap::{Parser, Subcommand};
 
 mod build;
+mod gradle;
 mod init;
+mod mcmod;
 mod run;
 mod sync;
+mod template;
 mod util;
 
 use init::InitCommand;

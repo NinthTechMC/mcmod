@@ -1,85 +1,110 @@
-use std::borrow::Cow;
 use std::cell::OnceCell;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio::fs::{self, File};
-use tokio::io::AsyncWriteExt;
+use tokio::fs;
+
+use crate::mcmod::Mcmod;
 
 pub type IoResult<T> = error_stack::Result<T, io::Error>;
+
+macro_rules! cd {
+    ($path:expr, $($x:expr),+) => {
+        {
+            #[allow(unused_mut)]
+            let mut path = $path;
+            $(
+                path.push($x);
+            )+
+            path
+        }
+    };
+}
+pub(crate) use cd;
+
+macro_rules! mkdir {
+    ($path:expr) => {
+        async {
+            let path = $path;
+            if !path.exists() {
+                fs::create_dir_all(&path).await?;
+            }
+            Ok::<(), error_stack::Report<tokio::io::Error>>(())
+        }
+    };
+}
+pub(crate) use mkdir;
+
+macro_rules! write_file {
+    ($path:expr, $content:expr) => {
+        async {
+            use tokio::io::AsyncWriteExt;
+            let path = $path;
+            let content = $content;
+            tokio::fs::File::create(path)
+                .await?
+                .write_all(content.as_bytes())
+                .await?;
+            Ok::<(), error_stack::Report<tokio::io::Error>>(())
+        }
+    };
+}
+pub(crate) use write_file;
+
+macro_rules! join_join_set {
+    ($join_set:expr) => {
+        async {
+            let mut join_set = $join_set;
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(result) => result?,
+                    Err(e) => Err(tokio::io::Error::from(e))?,
+                }
+            }
+            Ok::<(), error_stack::Report<tokio::io::Error>>(())
+        }
+    };
+}
+pub(crate) use join_join_set;
+
+pub fn confirm_yn() -> IoResult<bool> {
+    print!("(y/N): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    match input {
+        "y" | "Y" | "yes" | "Yes" => Ok(true),
+        "n" | "N" | "no" | "No" => Ok(false),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("Invalid input '{}'", input),
+        ))?,
+    }
+}
+
+/// Root of mcmod repo
+pub fn tool_root() -> IoResult<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let root = exe
+        .parent() // X/target/profile
+        .and_then(|x| x.parent()) // X/target
+        .and_then(|x| x.parent()); // X
+    match root {
+        Some(x) => Ok(x.to_path_buf()),
+        None => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Could not find root for mcmod. You need the whole repo to run this tool properly, not just the binary",
+        ))?,
+    }
+}
 
 #[derive(Debug)]
 pub struct Project {
     /// Root directory of the project
     pub root: PathBuf,
-    /// The mcmod.json file
+    /// The mcmod.yaml file
     mcmod: OnceCell<Mcmod>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Mcmod {
-    /// Version of Java to use
-    pub java: u32,
-    /// Version of template. Currently unused
-    pub template: String,
-    /// Mod Version. Can be any string.
-    pub version: String,
-    /// Override default gradle settings
-    pub gradle_override: Option<GradleOverride>,
-    /// The coremod class
-    pub coremod: Option<String>,
-    /// The access transformer file
-    pub access_transformer: Option<String>,
-    /// Libraries to download
-    pub libs: Vec<String>,
-
-    // mcmod.info fields
-    pub modid: String,
-    pub name: String,
-    pub description: String,
-    pub url: String,
-    pub update_url: String,
-    pub author_list: Vec<String>,
-    pub credits: String,
-    pub logo_file: String,
-    pub screenshots: Vec<String>,
-    pub dependencies: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GradleOverride {
-    pub enabled: bool,
-    pub version: String,
-    pub group: String,
-    pub archive_base_name: String,
-}
-
-impl Mcmod {
-    pub fn gradle_version(&self) -> &str {
-        match self.gradle_override.as_ref() {
-            Some(x) if x.enabled => &x.version,
-            _ => &self.version,
-        }
-    }
-
-    pub fn gradle_group(&self) -> Cow<'_, str> {
-        match self.gradle_override.as_ref() {
-            Some(x) if x.enabled => Cow::Borrowed(&x.group),
-            _ => format!("pistonmc.{}", self.modid.to_lowercase()).into(),
-        }
-    }
-
-    pub fn archive_base_name(&self) -> Cow<'_, str> {
-        match self.gradle_override.as_ref() {
-            Some(x) if x.enabled => Cow::Borrowed(&x.archive_base_name),
-            _ => self.name.to_lowercase().replace(' ', "-").into(),
-        }
-    }
 }
 
 impl Project {
@@ -87,7 +112,7 @@ impl Project {
     pub fn new_in(dir: &str) -> IoResult<Self> {
         let path = dunce::canonicalize(Path::new(dir))?;
         let mut cur_path = path.as_ref();
-        while !path.join("mcmod.json").exists() {
+        while !path.join("mcmod.yaml").exists() {
             if let Some(parent) = path.parent() {
                 cur_path = parent;
             } else {
@@ -107,83 +132,26 @@ impl Project {
         }
     }
 
-    /// Get the mcmod.json data
-    pub async fn mcmod_json(&self) -> IoResult<&Mcmod> {
+    /// Get the mcmod.yaml data
+    pub async fn mcmod(&self) -> IoResult<&Mcmod> {
         if let Some(x) = self.mcmod.get() {
             return Ok(x);
         }
-        let mcmod_path = self.root.join("mcmod.json");
+        let mcmod_path = self.root.join("mcmod.yaml");
         let mcmod = fs::read_to_string(mcmod_path).await?;
-        let mcmod: Mcmod = match serde_json::from_str(&mcmod) {
+        let mut mcmod: Mcmod = match serde_yaml::from_str(&mcmod) {
             Ok(mcmod) => mcmod,
             Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e))?,
         };
+        mcmod.apply_defaults(self).await?;
         Ok(self.mcmod.get_or_init(|| mcmod))
-    }
-
-    pub async fn write_mcmod_info(&self) -> IoResult<()> {
-        let mcmod = self.mcmod_json().await?;
-        let info = json!([{
-            "modid": mcmod.modid,
-            "name": mcmod.name,
-            "description": mcmod.description,
-            "version": "${version}",
-            "mcversion": "${mcversion}",
-            "url": mcmod.url,
-            "updateUrl": mcmod.update_url,
-            "authorList": mcmod.author_list,
-            "credits": mcmod.credits,
-            "logoFile": mcmod.logo_file,
-            "screenshots": mcmod.screenshots,
-            "dependencies": mcmod.dependencies,
-        }]);
-        let info_str = match serde_json::to_string_pretty(&info) {
-            Ok(x) => x,
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e))?,
-        };
-        let mut info_path = self.forge_root();
-        info_path.push("src");
-        info_path.push("main");
-        info_path.push("resources");
-        if !info_path.exists() {
-            fs::create_dir_all(&info_path).await?;
-        }
-        info_path.push("mcmod.info");
-        File::create(info_path)
-            .await?
-            .write_all(info_str.as_bytes())
-            .await?;
-        Ok(())
-    }
-
-    pub async fn write_pack_mcmeta(&self) -> IoResult<()> {
-        let mcmod = self.mcmod_json().await?;
-        let pack = json!({
-            "pack": {
-                "pack_format": 1,
-                "description": format!("Resources used for {}", mcmod.name),
-            }
-        });
-        let pack_str = match serde_json::to_string_pretty(&pack) {
-            Ok(x) => x,
-            Err(e) => Err(io::Error::new(io::ErrorKind::InvalidData, e))?,
-        };
-        let mut pack_path = self.forge_root();
-        pack_path.push("src");
-        pack_path.push("main");
-        pack_path.push("resources");
-        pack_path.push("pack.mcmeta");
-        File::create(pack_path)
-            .await?
-            .write_all(pack_str.as_bytes())
-            .await?;
-        Ok(())
     }
 
     pub fn source_root(&self) -> PathBuf {
         self.root.join("src")
     }
 
+    /// Detect the group from the src directory
     pub async fn source_group(&self) -> IoResult<String> {
         let mut current = self.source_root();
         let mut source_group = String::new();
@@ -219,39 +187,11 @@ impl Project {
         Ok(source_group)
     }
 
-    pub fn forge_root(&self) -> PathBuf {
-        self.root.join("forge")
+    pub fn target_root(&self) -> PathBuf {
+        self.root.join("target")
     }
 
     pub fn assets_root(&self) -> PathBuf {
         self.root.join("assets")
-    }
-
-    pub async fn run_gradlew(&self, args: &[&str]) -> IoResult<()> {
-        let java_version = self.mcmod_json().await?.java;
-        let jdk_home = format!("JDK{java_version}_HOME");
-        let jdk_home = match std::env::var(&jdk_home) {
-            Ok(x) => x,
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("Could not find {jdk_home} environment variable"),
-            ))?,
-        };
-        let java_home = Path::new(&jdk_home);
-        let gradlew = if cfg!(windows) {
-            self.forge_root().join("gradlew.bat")
-        } else {
-            self.forge_root().join("gradlew")
-        };
-
-        let status = Command::new(gradlew)
-            .args(args)
-            .current_dir(&self.forge_root())
-            .env("JAVA_HOME", java_home)
-            .status()?;
-        if !status.success() {
-            Err(io::Error::new(io::ErrorKind::Other, "gradlew failed"))?;
-        }
-        Ok(())
     }
 }

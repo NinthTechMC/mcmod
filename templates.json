@@ -1,0 +1,10 @@
+{
+    "ntmc-1.7.10": {
+        "url": "https://github.com/NinthTechMC/Template1.7.10",
+        "branch": "main"
+    },
+    "gtnh-1.7.10": {
+        "url": "https://github.com/GTNewHorizons/ExampleMod1.7.10",
+        "branch": "master"
+    }
+}

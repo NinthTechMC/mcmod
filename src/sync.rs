@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -10,19 +10,19 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-use async_recursion::async_recursion;
 use clap::Parser;
-use ninja_writer::*;
 use quick_xml::{Reader, Writer};
 use reqwest::Client;
 
-use crate::util::{IoResult, Project};
+use crate::gradle;
+use crate::template::{self, TemplateHandler};
+use crate::util::{IoResult, Project, write_file, cd, mkdir, join_join_set};
 
 #[derive(Debug, Parser)]
 pub struct SyncCommand {
     /// If syncing incrementally.
     ///
-    /// If true, the directory structure and mcmod.json is assumed to be the same.
+    /// If true, the directory structure and mcmod.yaml is assumed to be the same.
     /// Only updated source and asset files are synced.
     #[arg(short, long)]
     pub incremental: bool,
@@ -31,42 +31,111 @@ pub struct SyncCommand {
 impl SyncCommand {
     pub async fn run(mut self, dir: &str) -> IoResult<()> {
         let project = Project::new_in(dir)?;
-        let decomp_marker = project.forge_root().join(".decomp-workspace");
-        if !decomp_marker.exists() && !self.incremental {
-            println!("forcing non-incremental sync since decomp workspace is missing");
+
+        let template_marker = project.target_root().join(".mcmod-template");
+        if !template_marker.exists() && !self.incremental {
+            println!("forcing non-incremental sync since template has not been setup");
             self.incremental = false;
         }
 
-        if !self.incremental {
-            update_gradle(&project).await?;
+        if self.incremental {
+            sync_source(&project, self.incremental).await?;
+            return Ok(());
         }
+
+        let template = &project.mcmod().await?.template;
+        let template_handler = template.new_handler();
+
+        let template_name = template.to_string();
+        let template_marked = match fs::read_to_string(&template_marker).await {
+            Ok(s) => s,
+            Err(_) => String::new(),
+        };
+
+        let template_updated = template_marked.trim() != template_name;
+        if template_updated {
+            println!("template is not initialized or has changed. initializing new target directory");
+            let target_root = project.target_root();
+            if target_root.exists() {
+                fs::remove_dir_all(&target_root).await?;
+            }
+            let templates = template::read_templates().await?;
+            let template_def = match templates.get(&template_name) {
+                Some(t) => t,
+                None => Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Template '{}' not found in templates.json. You either specified an invalid template or this is a bug", template_name),
+                ))?,
+            };
+            {
+                let status = Command::new("git").args([
+                    "clone",
+                    "--branch", &template_def.branch,
+                    "--depth", "1",
+                    "--recurse-submodules",
+                    "--",
+                    &template_def.url,
+                    target_root.to_str().unwrap(),
+                ]).status()?;
+
+                if !status.success() {
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Failed to clone template",
+                    ))?;
+                }
+            }
+
+        } else {
+            println!("using existing target template '{template_name}'");
+        }
+
+        println!("syncing gradle properties");
+        sync_gradle_properties(template_handler.as_ref(), &project).await?;
+        println!("syncing source");
         sync_source(&project, self.incremental).await?;
 
-        if !self.incremental {
-            project.write_mcmod_info().await?;
-            project.write_pack_mcmeta().await?;
-            sync_libs(&project).await?;
-            if !decomp_marker.exists() {
-                project.run_gradlew(&["setupDecompWorkspace"]).await?;
-                File::create(&decomp_marker).await?;
-            }
-            update_eclipse(&project).await?;
+        println!("syncing metadata");
+        sync_metadata(&project).await?;
+        println!("syncing libs");
+        sync_libs(template_handler.as_ref(), &project).await?;
+        println!("syncing mods");
+        sync_mods(template_handler.as_ref(), &project).await?;
+
+        if template_updated {
+            println!("setting up target template '{template_name}'");
+            template_handler.setup_project(&project).await?;
+            write_file!(&template_marker, &template_name).await?;
         }
+
+        println!("syncing eclipse");
+        sync_eclipse_workspace(template_handler.as_ref(), &project).await?;
 
         Ok(())
     }
 }
 
+async fn sync_gradle_properties(handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
+    println!("updating gradle.properties");
+    let mut properties = handler.make_gradle_properties(&project).await?;
+    for (k, v) in project.mcmod().await?.gradle_overrides.iter() {
+        properties.insert(k.clone(), v.clone());
+    }
+    let gradle_properties = cd!(project.target_root(), "gradle.properties");
+    gradle::merge_properties(&gradle_properties, properties).await?;
+    Ok(())
+}
+
 async fn sync_source(project: &Project, incremental: bool) -> IoResult<()> {
-    println!("syncing source");
     let build_ninja = project.root.join("build.ninja");
     if !build_ninja.exists() || !incremental {
-        let mut forge_source_root = project.forge_root();
+        let mut forge_source_root = project.target_root();
         forge_source_root.push("src");
         if forge_source_root.exists() {
             fs::remove_dir_all(&forge_source_root).await?;
         }
-        write_build_ninja(&build_ninja, &project).await?;
+        let ninja_file = project.mcmod().await?.create_build_ninja(&project.root, &project.target_root()).await?;
+        write_file!(&build_ninja, ninja_file).await?;
     }
 
     let result = Command::new("ninja").current_dir(&project.root).status()?;
@@ -77,236 +146,43 @@ async fn sync_source(project: &Project, incremental: bool) -> IoResult<()> {
     Ok(())
 }
 
-async fn update_gradle(project: &Project) -> IoResult<()> {
-    let mcmod = project.mcmod_json().await?;
-
-    let gradle_generated_root = {
-        let mut p = project.forge_root();
-        p.push("gradle");
-        p.push("generated");
-        p
+async fn sync_metadata(project: &Project) -> IoResult<()> {
+    let mcmod = project.mcmod().await?;
+    let resource_path = cd!(project.target_root(), "src", "main", "resources");
+    mkdir!(&resource_path).await?;
+    let mcmod_info_future = async {
+        let info_str = mcmod.create_mcmod_info()?;
+        write_file!(resource_path.join("mcmod.info"), info_str).await
     };
-    fs::create_dir_all(&gradle_generated_root).await?;
-
-    let mut join_set = JoinSet::new();
-    join_set.spawn(write_compatibility_gradle(
-        gradle_generated_root.clone(),
-        mcmod.java,
-    ));
-    join_set.spawn(write_coremod_gradle(
-        gradle_generated_root.clone(),
-        mcmod.coremod.as_ref().cloned(),
-        mcmod.access_transformer.as_ref().cloned(),
-    ));
-    let group_gradle_future = write_group_gradle(
-        gradle_generated_root,
-        mcmod.gradle_version().to_owned(),
-        mcmod.gradle_group().into_owned(),
-        mcmod.archive_base_name().into_owned(),
-        mcmod.modid.to_owned(),
-        mcmod.version.to_owned(),
-        project.source_group().await?,
-    );
-    join_set.spawn(group_gradle_future);
-
-    while let Some(result) = join_set.join_next().await {
-        match result {
-            Ok(result) => result?,
-            Err(e) => Err(io::Error::from(e))?,
-        }
-    }
-
-    Ok(())
-}
-
-async fn write_compatibility_gradle(gradle_generated_root: PathBuf, java: u32) -> IoResult<()> {
-    let compability_str = {
-        let version = if java == 8 {
-            "1.8".to_string()
-        } else {
-            java.to_string()
-        };
-        format!(
-            r###"
-sourceCompatibility = {version}
-targetCompatibility = {version}
-"###
-        )
+    let pack_mcmeta_future = async {
+        let pack_str = mcmod.create_pack_mcmeta()?;
+        write_file!(resource_path.join("pack.mcmeta"), pack_str).await
     };
-
-    File::create(gradle_generated_root.join("compatibility.gradle"))
-        .await?
-        .write_all(compability_str.as_bytes())
-        .await?;
-
+    let (r1, r2) = tokio::join!(mcmod_info_future, pack_mcmeta_future);
+    r1?;
+    r2?;
     Ok(())
 }
 
-async fn write_coremod_gradle(
-    gradle_generated_root: PathBuf,
-    coremod: Option<String>,
-    access_transformer: Option<String>,
-) -> IoResult<()> {
-    let mut output_str = String::new();
-    output_str.push_str("jar {\n");
-    output_str.push_str("    manifest {\n");
-    if let Some(class) = coremod {
-        output_str.push_str(&format!("        attributes 'FMLCorePlugin': '{class}'\n"));
-        output_str.push_str(&format!(
-            "        attributes 'FMLCorePluginContainsFMLMod': 'true'\n"
-        ));
-    }
-    if let Some(transformer) = access_transformer {
-        output_str.push_str(&format!(
-            "        attributes 'AccessTransformer': '{transformer}'\n"
-        ));
-    }
-    output_str.push_str("    }\n");
-    output_str.push_str("}\n");
-
-    File::create(gradle_generated_root.join("coremod.gradle"))
-        .await?
-        .write_all(output_str.as_bytes())
-        .await?;
-
+async fn sync_libs(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
+    let libs_root = template_handler.libs_dir(&project)?;
+    let libs = &project.mcmod().await?.libs;
+    let cdn_url_prefix = "https://cdn.pistonite.org/minecraft/devjars/";
+    sync_downloads(&libs_root, libs, cdn_url_prefix).await?;
     Ok(())
 }
 
-async fn write_group_gradle(
-    gradle_generated_root: PathBuf,
-    version: String,
-    group: String,
-    archive_base_name: String,
-    code_modid: String,
-    code_version: String,
-    code_group: String,
-) -> IoResult<()> {
-    let code_group_internal = code_group.replace('.', "/");
-
-    let group_str = format!(
-        r###"version = '{version}'
-group = '{group}'
-archivesBaseName = '{archive_base_name}'
-
-minecraft {{
-    replaceIn "ModInfo.java"
-    replaceIn "CoremodInfo.java"
-
-    replace "@modid@", "{code_modid}"
-    replace "@version@", "{code_version}"
-    replace "@group@", "{code_group}"
-    replace "@groupInternal@", "{code_group_internal}"
-
-}}
-"###
-    );
-
-    File::create(gradle_generated_root.join("group.gradle"))
-        .await?
-        .write_all(group_str.as_bytes())
-        .await?;
-
+async fn sync_mods(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
+    let mods_root = cd!(template_handler.run_dir(&project)?, "mods");
+    let mods = &project.mcmod().await?.mods;
+    let cdn_url_prefix = "https://cdn.pistonite.org/minecraft/jars/";
+    sync_downloads(&mods_root, mods, cdn_url_prefix).await?;
     Ok(())
 }
 
-async fn write_build_ninja(file: &Path, project: &Project) -> IoResult<()> {
-    let ninja = Ninja::new();
-    ninja.comment("Incremental build file for copying source and assets");
-    ninja.comment("Please run `mcmod sync` to update this file when file structure changes");
-
-    let cp = ninja_copy_rule().description("Copying $in").add_to(&ninja);
-
-    let source_root = project.source_root();
-
-    let mut target_root = project.forge_root();
-    target_root.push("src");
-    target_root.push("main");
-    target_root.push("java");
-
-    add_copy_edge(
-        Arc::new(source_root),
-        Arc::new(target_root),
-        cp.clone(),
-        PathBuf::new(),
-    )
-    .await?;
-
-    let assets_root = project.assets_root();
-    if assets_root.exists() {
-        let mut target_root = project.forge_root();
-        target_root.push("src");
-        target_root.push("main");
-        target_root.push("resources");
-        target_root.push("assets");
-        add_copy_edge(
-            Arc::new(assets_root),
-            Arc::new(target_root),
-            cp,
-            PathBuf::new(),
-        )
-        .await?;
-    }
-
-    File::create(file)
-        .await?
-        .write_all(ninja.to_string().as_bytes())
-        .await?;
-    Ok(())
-}
-
-#[async_recursion]
-async fn add_copy_edge(
-    source_root: Arc<PathBuf>,
-    target_root: Arc<PathBuf>,
-    cp: RuleRef,
-    path: PathBuf,
-) -> IoResult<()> {
-    let source_path = source_root.join(&path);
-    let target_path = target_root.join(&path);
-    if source_path.is_dir() {
-        if !target_path.exists() {
-            fs::create_dir_all(&target_path).await?;
-        }
-        let mut join_set = JoinSet::new();
-        let mut dir = fs::read_dir(source_path).await?;
-        while let Some(entry) = dir.next_entry().await? {
-            let path = path.join(entry.file_name());
-            let source_root = Arc::clone(&source_root);
-            let target_root = Arc::clone(&target_root);
-            let cp = cp.clone();
-            join_set.spawn(async move { add_copy_edge(source_root, target_root, cp, path).await });
-        }
-        while let Some(result) = join_set.join_next().await {
-            match result {
-                Ok(result) => result?,
-                Err(e) => Err(io::Error::from(e))?,
-            }
-        }
-    } else {
-        cp.build([escape_build(&target_path.display().to_string())])
-            .with([escape_build(&source_path.display().to_string())]);
-    }
-
-    Ok(())
-}
-
-#[cfg(windows)]
-fn ninja_copy_rule() -> Rule {
-    Rule::new("cp", "coreutils cp $in $out")
-}
-
-#[cfg(not(windows))]
-fn ninja_copy_rule() -> Rule {
-    Rule::new("cp", "cp $in $out")
-}
-
-async fn sync_libs(project: &Project) -> IoResult<()> {
-    let libs_root = project.forge_root().join("libs");
-    if !libs_root.exists() {
-        fs::create_dir_all(&libs_root).await?;
-    }
-    let libs = &project.mcmod_json().await?.libs;
+async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str) -> IoResult<()> {
     let mut needs_download = libs.iter().map(|lib| lib.as_str()).collect::<Vec<_>>();
+    mkdir!(libs_root).await?;
     let mut dir = fs::read_dir(&libs_root).await?;
     while let Some(entry) = dir.next_entry().await? {
         let file_name = entry.file_name();
@@ -325,16 +201,20 @@ async fn sync_libs(project: &Project) -> IoResult<()> {
                 lib == &name
             }
         }) {
-            Some(i) => {
-                // up to date
-                needs_download.swap_remove(i);
+                Some(i) => {
+                    // up to date
+                    needs_download.swap_remove(i);
+                }
+                None => {
+                    let path = entry.path();
+                    println!("removing '{}'", path.display());
+                    if path.is_dir() {
+                        fs::remove_dir_all(path).await?;
+                    } else {
+                        fs::remove_file(path).await?;
+                    }
+                }
             }
-            None => {
-                let path = entry.path();
-                println!("removing '{}'", path.display());
-                fs::remove_file(path).await?;
-            }
-        }
     }
     let mut join_set = JoinSet::new();
     let (send, mut recv) = mpsc::channel::<IoResult<String>>(100);
@@ -386,7 +266,8 @@ async fn sync_libs(project: &Project) -> IoResult<()> {
             let path = libs_root.join(file_name);
             (url, path)
         } else {
-            let url = format!("https://cdn.pistonite.org/minecraft/devjars/{lib}");
+            // let url = format!("https://cdn.pistonite.org/minecraft/devjars/{lib}");
+            let url = format!("{cdn_url_prefix}{lib}");
             let path = libs_root.join(lib);
             (url, path)
         };
@@ -394,22 +275,17 @@ async fn sync_libs(project: &Project) -> IoResult<()> {
         let client = Arc::clone(&client);
         let send = send.clone();
         join_set.spawn(async move {
-            let result = download_devjar(client, &url, &path).await.map(|_| url);
+            let result = download_binary(client, &url, &path).await.map(|_| url);
             let _ = send.send(result).await;
             Ok(())
         });
     }
     drop(send);
-    while let Some(result) = join_set.join_next().await {
-        match result {
-            Ok(result) => result?,
-            Err(e) => Err(io::Error::from(e))?,
-        }
-    }
+    join_join_set!(join_set).await?;
     Ok(())
 }
 
-async fn download_devjar(client: Arc<Client>, url: &str, path: &Path) -> IoResult<()> {
+async fn download_binary(client: Arc<Client>, url: &str, path: &Path) -> IoResult<()> {
     let bytes_result = async { client.get(url).send().await?.bytes().await }.await;
 
     let bytes = match bytes_result {
@@ -422,11 +298,11 @@ async fn download_devjar(client: Arc<Client>, url: &str, path: &Path) -> IoResul
     Ok(())
 }
 
-async fn update_eclipse(project: &Project) -> IoResult<()> {
-    project.run_gradlew(&["eclipse"]).await?;
+async fn sync_eclipse_workspace(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
+    template_handler.setup_eclipse(&project).await?;
     let output_file = project.root.join(".classpath");
     let writer = std::io::BufWriter::new(std::fs::File::create(&output_file)?);
-    let classpath_file = project.forge_root().join(".classpath");
+    let classpath_file = project.target_root().join(".classpath");
     let input = fs::read_to_string(&classpath_file)
         .await?
         .replace("\r\n", "\n");
@@ -463,7 +339,7 @@ async fn update_eclipse(project: &Project) -> IoResult<()> {
                                     if exists {
                                         attr.value = Cow::Borrowed(b"assets");
                                     } else {
-                                        attr.value = Cow::Borrowed(b"forge/src/main/resources");
+                                        attr.value = Cow::Borrowed(b"target/src/main/resources");
                                     }
                                     let attr = attributes
                                         .iter_mut()
@@ -505,7 +381,7 @@ async fn update_eclipse(project: &Project) -> IoResult<()> {
         ))?,
     };
     let writer = std::io::BufWriter::new(std::fs::File::create(&output_file)?);
-    let project_file = project.forge_root().join(".project");
+    let project_file = project.target_root().join(".project");
     let input = fs::read_to_string(&project_file)
         .await?
         .replace("\r\n", "\n");

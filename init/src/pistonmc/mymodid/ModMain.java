@@ -1,4 +1,4 @@
-package pistonmc.forge1710template;
+package pistonmc.mymodid;
 
 import net.minecraft.init.Blocks;
 import cpw.mods.fml.common.Mod;

@@ -1,4 +1,4 @@
-package pistonmc.forge1710template;
+package pistonmc.mymodid;
 
 /**
  * Injected info values
