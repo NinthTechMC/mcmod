@@ -2,7 +2,10 @@ use crate::sync::SyncCommand;
 use crate::util::{IoResult, Project};
 
 pub async fn run_build(dir: &str) -> IoResult<()> {
-    let sync = SyncCommand { incremental: false };
+    let sync = SyncCommand {
+        incremental: false,
+        eclipse: true,
+    };
     sync.run(dir).await?;
     let project = Project::new_in(dir)?;
     let template_handler = project.mcmod().await?.template.new_handler();

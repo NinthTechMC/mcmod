@@ -26,6 +26,10 @@ pub struct SyncCommand {
     /// Only updated source and asset files are synced.
     #[arg(short, long)]
     pub incremental: bool,
+
+    /// Force syncing eclipse project
+    #[arg(long)]
+    pub eclipse: bool,
 }
 
 impl SyncCommand {
@@ -103,9 +107,9 @@ impl SyncCommand {
         println!("syncing metadata");
         sync_metadata(&project).await?;
         println!("syncing libs");
-        sync_libs(template_handler.as_ref(), &project).await?;
+        let libs_changed = sync_libs(template_handler.as_ref(), &project).await?;
         println!("syncing mods");
-        sync_mods(template_handler.as_ref(), &project).await?;
+        let mods_changed = sync_mods(template_handler.as_ref(), &project).await?;
 
         if template_updated {
             println!("setting up target template '{template_name}'");
@@ -113,8 +117,10 @@ impl SyncCommand {
             write_file!(&template_marker, &template_name).await?;
         }
 
-        println!("syncing eclipse");
-        sync_eclipse_workspace(template_handler.as_ref(), &project).await?;
+        if self.eclipse || template_updated || libs_changed || mods_changed {
+            println!("syncing eclipse");
+            sync_eclipse_workspace(template_handler.as_ref(), &project).await?;
+        }
 
         println!("sync done");
 
@@ -175,23 +181,25 @@ async fn sync_metadata(project: &Project) -> IoResult<()> {
     Ok(())
 }
 
-async fn sync_libs(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
+async fn sync_libs(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<bool> {
     let libs_root = template_handler.libs_dir(project)?;
     let libs = &project.mcmod().await?.libs;
     let cdn_url_prefix = "https://cdn.pistonite.org/minecraft/devjars/";
-    sync_downloads(&libs_root, libs, cdn_url_prefix).await?;
-    Ok(())
+    let changed = sync_downloads(&libs_root, libs, cdn_url_prefix).await?;
+    Ok(changed)
 }
 
-async fn sync_mods(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<()> {
+async fn sync_mods(template_handler: &dyn TemplateHandler, project: &Project) -> IoResult<bool> {
     let mods_root = cd!(template_handler.run_dir(project)?, "mods");
     let mods = &project.mcmod().await?.mods;
     let cdn_url_prefix = "https://cdn.pistonite.org/minecraft/jars/";
-    sync_downloads(&mods_root, mods, cdn_url_prefix).await?;
-    Ok(())
+    let changed = sync_downloads(&mods_root, mods, cdn_url_prefix).await?;
+    Ok(changed)
 }
 
-async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str) -> IoResult<()> {
+/// Sync downloads in a directory and return if anything was updated
+async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str) -> IoResult<bool> {
+    let mut changed = false;
     let mut needs_download = libs.iter().map(|lib| lib.as_str()).collect::<Vec<_>>();
     mkdir!(libs_root).await?;
     let mut dir = fs::read_dir(&libs_root).await?;
@@ -218,6 +226,7 @@ async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str)
             }
             None => {
                 let path = entry.path();
+                changed = true;
                 println!("removing '{}'", path.display());
                 if path.is_dir() {
                     fs::remove_dir_all(path).await?;
@@ -251,6 +260,9 @@ async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str)
             None => Ok(()),
         }
     });
+    if !needs_download.is_empty() {
+        changed = true;
+    }
     for lib in needs_download {
         if lib.starts_with("./") {
             let file_name = match Path::new(lib).file_name() {
@@ -293,7 +305,7 @@ async fn sync_downloads(libs_root: &Path, libs: &[String], cdn_url_prefix: &str)
     }
     drop(send);
     join_join_set!(join_set).await?;
-    Ok(())
+    Ok(changed)
 }
 
 async fn download_binary(client: Arc<Client>, url: &str, path: &Path) -> IoResult<()> {

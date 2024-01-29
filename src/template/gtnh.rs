@@ -76,6 +76,7 @@ impl TemplateHandler for Gtnh1710Handler {
         if mcmod.mixins.is_empty() {
             map.insert("usesMixins".to_owned(), "false".to_owned());
             map.insert("mixinsPackage".to_owned(), "".to_owned());
+            map.insert("mixinPlugin".to_owned(), "".to_owned());
         } else {
             map.insert("usesMixins".to_owned(), "true".to_owned());
             match mcmod.mixins.strip_prefix(&group_prefix) {
@@ -90,6 +91,12 @@ impl TemplateHandler for Gtnh1710Handler {
                     ),
                 ))?,
             }
+            if mcmod.coremod.is_empty() {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "coremod class must be specified (and implement IMixinConfigPlugin) if mixins are used",
+                ))?;
+            }
         }
 
         if mcmod.coremod.is_empty() {
@@ -98,6 +105,9 @@ impl TemplateHandler for Gtnh1710Handler {
             match mcmod.coremod.strip_prefix(&group_prefix) {
                 Some(x) => {
                     map.insert("coreModClass".to_owned(), x.to_owned());
+                    if !mcmod.mixins.is_empty() {
+                        map.insert("mixinPlugin".to_owned(), x.to_owned());
+                    }
                 }
                 None => Err(io::Error::new(
                     io::ErrorKind::Other,
@@ -108,6 +118,9 @@ impl TemplateHandler for Gtnh1710Handler {
                 ))?,
             }
         }
+
+        // no good way to apply spotless fix to our source for now
+        map.insert("disableSpotless".to_owned(), "true".to_owned());
 
         Ok(map)
     }

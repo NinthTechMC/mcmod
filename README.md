@@ -1,11 +1,14 @@
 # mcmod
-My CLI tool for MC mod projects
+My CLI tool for MC mod projects.
 
 ## Concept
 This tool keeps the "source files" of the mod in a small, eclipse project that can be
 imported properly by jdtls, which refuses to work with any gradle project that is slightly different
 from whatever the "standard" jdtls uses. It uses the `mcmod.yaml` config file to copy sources
 over to a "template" project, and generate metadata and properties to make the project build.
+
+**I don't recommend anyone using this tool, since it's personalized to my workflows**. If you do want to give it a try
+please go ahead, just know that it's always unstable.
 
 ## Install
 Prereq: you need these programs for either installing or running the tool:

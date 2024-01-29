@@ -34,6 +34,7 @@ impl RunCommand {
     pub async fn run(self, dir: &str) -> IoResult<()> {
         let sync = SyncCommand {
             incremental: !self.sync,
+            eclipse: false,
         };
         sync.run(dir).await?;
         let project = Project::new_in(dir)?;
